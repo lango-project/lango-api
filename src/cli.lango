@@ -1,8 +1,7 @@
-import js "node:os" as os
-import js "node:process" as process
-import "./application_paths"
-    developmentPaths(applicationName, home, localAppData, platform)
-    serverPaths(applicationName, programData, programFiles, platform)
+import "./configuration"
+    defaultConfiguration(applicationName)
+import "./server"
+    start(configuration)
 
 export main(args)
 
@@ -12,12 +11,6 @@ main(args)
         return null
 
     applicationName = args[0]
-    mode = args[1]
-    home = os.homedir()
-
-    if mode == "server"
-        paths = serverPaths(applicationName, process.env.ProgramData, process.env.ProgramFiles, process.platform)
-      else
-          paths = developmentPaths(applicationName, home, process.env.LOCALAPPDATA, process.platform)
-
-    println(paths)
+    configuration = defaultConfiguration(applicationName)
+    start(configuration)
+    println("lango-api listening on ${configuration.host}:${configuration.port}")

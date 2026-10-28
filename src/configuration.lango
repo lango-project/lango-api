@@ -1,0 +1,8 @@
+export defaultConfiguration(applicationName)
+
+defaultConfiguration(applicationName)
+    return {
+        applicationName: applicationName,
+        host: "127.0.0.1",
+        port: 3000
+    }

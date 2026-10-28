@@ -1,0 +1,13 @@
+import js "node:http" as http
+
+export start(configuration)
+
+start(configuration)
+    server = new http/Server((request, response)
+        response.writeHead(404, {
+            "Content-Type": "application/json; charset=utf-8"
+        })
+        response.end("{\"error\":\"RouteNotFound\"}")
+    )
+    server.listen(configuration.port, configuration.host)
+    return server
