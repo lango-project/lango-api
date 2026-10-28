@@ -17,7 +17,7 @@ Reverse-proxy support, service definitions, hot reload, authentication, and the 
 
 Source code and tests are `.lango` files. JavaScript generated from them is published under `dist/` so the npm package can run; `dist/` is never edited manually.
 
-The Lango compiler does not yet produce an executable entry that invokes an exported `main` function for an npm `bin`. Once that is available, this package will directly provide the `lango-api` command.
+The package is built as an executable Lango artifact: its generated entry invokes the exported `main(args)` function without a handwritten JavaScript bootstrap.
 
 ## Lisans
 

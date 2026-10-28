@@ -7,6 +7,9 @@
     "access": "public"
   },
   "type": "module",
+  "bin": {
+    "lango-api": "dist/cli.mjs"
+  },
   "files": [
     "src/*.lango",
     "dist/**",
@@ -15,7 +18,7 @@
     "NOTICE"
   ],
   "scripts": {
-    "build": "lango build src/cli.lango --out dist/cli.mjs",
+    "build": "lango build src/cli.lango --out dist/cli.mjs --executable",
     "test": "lango test src/application_paths.lango"
   },
   "devDependencies": {
