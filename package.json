@@ -1,0 +1,27 @@
+{
+  "name": "@lango-project/lango-api",
+  "version": "0.1.0",
+  "description": "HTTP API host for Lango applications.",
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "files": [
+    "src/*.lango",
+    "dist/**",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "build": "lango build src/cli.lango --out dist/cli.mjs",
+    "test": "lango test src/application_paths.lango"
+  },
+  "devDependencies": {
+    "@lango-project/lango-js": "^0.1.2"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

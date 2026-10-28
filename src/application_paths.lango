@@ -1,0 +1,54 @@
+import js "node:path" as path
+
+export developmentPaths(applicationName, home, localAppData, platform)
+export serverPaths(applicationName, programData, programFiles, platform)
+
+developmentPaths(applicationName, home, localAppData, platform)
+    if platform == "win32"
+        return {
+            appRoot: path.join(home, "src", applicationName),
+            dataDir: path.join(localAppData, applicationName, "data"),
+            stateDir: path.join(localAppData, applicationName),
+            logDir: path.join(localAppData, applicationName, "logs"),
+            configFile: path.join(localAppData, applicationName, "conf.xml")
+        }
+
+    return {
+        appRoot: path.join(home, "src", applicationName),
+        dataDir: path.join(home, ".local", "share", applicationName, "data"),
+        stateDir: path.join(home, ".local", "state", applicationName),
+        logDir: path.join(home, ".local", "state", applicationName, "logs"),
+        configFile: path.join(home, ".config", applicationName, "conf.xml")
+    }
+
+serverPaths(applicationName, programData, programFiles, platform)
+    if platform == "win32"
+        return {
+            appRoot: path.join(programFiles, applicationName),
+            dataDir: path.join(programData, applicationName, "data"),
+            stateDir: path.join(programData, applicationName),
+            logDir: path.join(programData, applicationName, "logs"),
+            configFile: path.join(programData, applicationName, "conf.xml")
+        }
+
+    return {
+        appRoot: path.join("/srv", applicationName),
+        dataDir: path.join("/var/lib", applicationName, "data"),
+        stateDir: path.join("/var/lib", applicationName, "state"),
+        logDir: path.join("/var/log", applicationName),
+        configFile: path.join("/etc", applicationName, "conf.xml")
+    }
+
+test "development paths keep mutable files outside the Git worktree"
+    paths = developmentPaths("shop", "/home/alice", null, "linux")
+    assert paths.appRoot == "/home/alice/src/shop"
+    assert paths.dataDir == "/home/alice/.local/share/shop/data"
+    assert paths.logDir == "/home/alice/.local/state/shop/logs"
+    assert paths.configFile == "/home/alice/.config/shop/conf.xml"
+
+test "server paths separate program, data, logs and configuration"
+    paths = serverPaths("shop", null, null, "linux")
+    assert paths.appRoot == "/srv/shop"
+    assert paths.dataDir == "/var/lib/shop/data"
+    assert paths.logDir == "/var/log/shop"
+    assert paths.configFile == "/etc/shop/conf.xml"
