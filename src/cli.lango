@@ -7,7 +7,9 @@ import "./configuration"
     defaultConfiguration(applicationName)
     loadConfiguration(applicationName, configurationFile, paths)
 import "./server"
-    start(configuration)
+    start(configuration, routes)
+import "./api_registry"
+    loadRoutes(apiFile)
 
 export main(args)
 
@@ -23,5 +25,6 @@ main(args)
       else
           paths = developmentPaths(applicationName, os.homedir(), process.env.LOCALAPPDATA, process.platform)
     configuration = loadConfiguration(applicationName, paths.configFile, paths)
-    start(configuration)
+    routes = loadRoutes(configuration.appRoot + "/deploy/api.xml")
+    start(configuration, routes)
     println("lango-api listening on ${configuration.host}:${configuration.port}")

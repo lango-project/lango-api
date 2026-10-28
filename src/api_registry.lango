@@ -1,0 +1,55 @@
+import js "node:fs" as fs
+import "./configuration"
+    attribute(xml, name)
+
+export loadRoutes(apiFile)
+export findRoute(routes, requestPath)
+export endpointFromXml(xml)
+export routeMissing(route)
+
+endpointFromXml(xml)
+    path = attribute(xml, "path")
+    mod = attribute(xml, "mod")
+    func = attribute(xml, "func")
+    if path == null or mod == null or func == null
+        throw "ApiEndpointRequiresPathModAndFunc"
+    if path[0] != "/"
+        throw "ApiEndpointPathMustStartWithSlash"
+    return {
+        path: path,
+        mod: mod,
+        func: func
+    }
+
+loadRoutes(apiFile)
+    if fs.existsSync(apiFile) == false
+        throw "ApiFileNotFound"
+    xml = fs.readFileSync(apiFile, "utf8")
+    parts = xml.split("<endpoint")
+    routes = []
+    for parts as part
+        if part.indexOf("/>") >= 0
+            routes.add(endpointFromXml(part))
+    return routes
+
+findRoute(routes, requestPath)
+    for routes as route
+        if route.path == requestPath
+            return route
+    return null
+
+routeMissing(route)
+    return route == null
+
+test "endpoint XML requires its route fields"
+    endpoint = endpointFromXml(" path=\"/math/add\" mod=\"math\" func=\"add\" />")
+    assert endpoint.path == "/math/add"
+    assert endpoint.mod == "math"
+    assert endpoint.func == "add"
+
+test "endpoint XML rejects a relative path"
+    try
+        endpointFromXml(" path=\"math/add\" mod=\"math\" func=\"add\" />")
+        assert false
+    catch error
+        assert error == "ApiEndpointPathMustStartWithSlash"
