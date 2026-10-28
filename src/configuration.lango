@@ -1,4 +1,9 @@
+import js "node:fs" as fs
+import js "node:process" as process
+
 export defaultConfiguration(applicationName)
+export loadConfiguration(applicationName, configurationFile, paths)
+export attribute(xml, name)
 
 defaultConfiguration(applicationName)
     return {
@@ -6,3 +11,54 @@ defaultConfiguration(applicationName)
         host: "127.0.0.1",
         port: 3000
     }
+
+attribute(xml, name)
+    prefix = "${name}=\""
+    start = xml.indexOf(prefix)
+    if start < 0
+        return null
+    valueStart = start + prefix.length
+    valueEnd = xml.indexOf("\"", valueStart)
+    if valueEnd < 0
+        return null
+    return xml.slice(valueStart, valueEnd)
+
+loadConfiguration(applicationName, configurationFile, paths)
+    configuration = defaultConfiguration(applicationName)
+    configuration.appRoot = paths.appRoot
+    configuration.dataDir = paths.dataDir
+    configuration.stateDir = paths.stateDir
+    configuration.logDir = paths.logDir
+
+    if fs.existsSync(configurationFile)
+        xml = fs.readFileSync(configurationFile, "utf8")
+        host = attribute(xml, "host")
+        port = attribute(xml, "port")
+        appRoot = attribute(xml, "appRoot")
+        dataDir = attribute(xml, "dataDir")
+        stateDir = attribute(xml, "stateDir")
+        logDir = attribute(xml, "logDir")
+        if host != null
+            configuration.host = host
+        if port != null
+            configuration.port = to_js_number($(port))
+        if appRoot != null
+            configuration.appRoot = appRoot
+        if dataDir != null
+            configuration.dataDir = dataDir
+        if stateDir != null
+            configuration.stateDir = stateDir
+        if logDir != null
+            configuration.logDir = logDir
+
+    if process.env.LANGO_HOST != null
+        configuration.host = process.env.LANGO_HOST
+    if process.env.LANGO_PORT != null
+        configuration.port = to_js_number($(process.env.LANGO_PORT))
+    return configuration
+
+test "configuration attribute reads a quoted XML attribute"
+    assert attribute("<http host=\"127.0.0.1\" port=\"3000\" />", "host") == "127.0.0.1"
+
+test "configuration attribute returns null when absent"
+    assert attribute("<http port=\"3000\" />", "host") == null
