@@ -22,15 +22,45 @@ start(configuration, routes)
             })
             response.end("{\"error\":\"RouteNotFound\"}")
             return
-        moduleFile = configuration.appRoot + "/app/" + route.mod + ".mjs"
-        input = {}
-        import_module(moduleFile).then((module)
-            capture route, input, response
-            result = module[route.func](input)
-            response.writeHead(200, {
-                "Content-Type": "application/json; charset=utf-8"
-            })
-            response.end(to_json(result))
+        body = ""
+        appRoot = configuration.appRoot
+        request.on("data", (chunk)
+            capture body
+            body = body + chunk.toString()
+        )
+        request.on("end", ()
+            capture appRoot, route, response, body
+            input = {}
+            try
+                if body != ""
+                    input = from_json(body)
+            catch error
+                response.writeHead(400, {
+                    "Content-Type": "application/json; charset=utf-8"
+                })
+                response.end("{\"error\":\"BadRequest\"}")
+                return
+            try
+                moduleFile = appRoot + "/app/" + route.mod + ".mjs"
+                import_module(moduleFile).then((module)
+                    capture input, response, route
+                    result = module[route.func](input)
+                    response.writeHead(200, {
+                        "Content-Type": "application/json; charset=utf-8"
+                    })
+                    response.end(to_json(result))
+                ).catch((error)
+                    capture response
+                    response.writeHead(500, {
+                        "Content-Type": "application/json; charset=utf-8"
+                    })
+                    response.end("{\"error\":\"InternalServerError\"}")
+                )
+            catch error
+                response.writeHead(500, {
+                    "Content-Type": "application/json; charset=utf-8"
+                })
+                response.end("{\"error\":\"InternalServerError\"}")
         )
     )
     server.listen(configuration.port, configuration.host)
