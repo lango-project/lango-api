@@ -29,7 +29,10 @@ loadRoutes(apiFile)
     routes = []
     for parts as part
         if part.indexOf("/>") >= 0
-            routes.add(endpointFromXml(part))
+            endpoint = endpointFromXml(part)
+            if routeMissing(findRoute(routes, endpoint.path)) == false
+                throw "ApiDuplicateEndpointPath"
+            routes.add(endpoint)
     return routes
 
 findRoute(routes, requestPath)

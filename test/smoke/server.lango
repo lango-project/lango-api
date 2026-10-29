@@ -1,0 +1,15 @@
+import "../../src/api_registry"
+    loadRoutes(apiFile)
+import "../../src/server"
+    start(configuration, routes)
+
+export main(args)
+
+main(args)
+    configuration = {
+        host: "127.0.0.1"
+        port: 39457
+        appRoot: "/home/alparsla/src/lango-project/lango-api/test/smoke"
+    }
+    routes = loadRoutes(configuration.appRoot + "/deploy/api.xml")
+    start(configuration, routes)

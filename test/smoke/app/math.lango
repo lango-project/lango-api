@@ -1,0 +1,6 @@
+export add(input)
+
+add(input)
+    return {
+        total: input.left + input.right
+    }
