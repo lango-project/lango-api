@@ -8,7 +8,7 @@ export start(configuration, routes)
 
 start(configuration, routes)
     server = new http/Server((request, response)
-        capture routes
+        capture configuration, routes
         if request.method != "POST"
             response.writeHead(405, {
                 "Content-Type": "application/json; charset=utf-8"
@@ -22,10 +22,16 @@ start(configuration, routes)
             })
             response.end("{\"error\":\"RouteNotFound\"}")
             return
-        response.writeHead(501, {
-            "Content-Type": "application/json; charset=utf-8"
-        })
-        response.end("{\"error\":\"HandlerNotImplemented\"}")
+        moduleFile = configuration.appRoot + "/app/" + route.mod + ".mjs"
+        input = {}
+        import_module(moduleFile).then((module)
+            capture route, input, response
+            result = module[route.func](input)
+            response.writeHead(200, {
+                "Content-Type": "application/json; charset=utf-8"
+            })
+            response.end(to_json(result))
+        )
     )
     server.listen(configuration.port, configuration.host)
     return server
