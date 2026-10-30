@@ -14,8 +14,9 @@ import "./api_registry"
 export main(args)
 
 main(args)
+    context log
     if args.length == 0
-        println("Usage: lango-api <app> [development|server]")
+        log.err("Usage: lango-api <app> [development|server]")
         return null
 
     applicationName = args[0]
@@ -27,4 +28,4 @@ main(args)
     configuration = loadConfiguration(applicationName, paths.configFile, paths)
     routes = loadRoutes(configuration.appRoot + "/deploy/api.xml")
     start(configuration, routes)
-    println("lango-api listening on ${configuration.host}:${configuration.port}")
+    log.info("lango-api listening on ${configuration.host}:${configuration.port}")
