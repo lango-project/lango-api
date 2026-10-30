@@ -1,17 +1,15 @@
 import js "node:fs" as fs
-import "./configuration"
-    attribute(xml, name)
 
 export loadRoutes(apiFile)
 export findRoute(routes, requestPath)
-export endpointFromXml(xml)
+export endpointFromTag(tag)
 export routeMissing(route)
 export routesFromXml(xml)
 
-endpointFromXml(xml)
-    path = attribute(xml, "path")
-    mod = attribute(xml, "mod")
-    func = attribute(xml, "func")
+endpointFromTag(tag)
+    path = tag.path
+    mod = tag.mod
+    func = tag.func
     if path == null or func == null
         throw "ApiEndpointRequiresPathAndFunc"
     if path[0] != "/"
@@ -29,35 +27,31 @@ loadRoutes(apiFile)
     return routesFromXml(xml)
 
 routesFromXml(xml)
-    lines = xml.split("\n")
+    root = xml2obj(xml)
     routes = []
-    groups = [{ path: "", mod: null }]
-    parent = null
-    for lines as line
-        tag = line.trim()
-        if tag.startsWith("<group ")
-            parent = groups[groups.length - 1]
-            path = attribute(tag, "path")
-            mod = attribute(tag, "mod")
+    collectRoutes(root, "", null, routes)
+    return routes
+
+collectRoutes(tag, parentPath, parentMod, routes)
+    for tag.children() as child
+        if child.tag() == "group"
+            path = child.path
+            mod = child.mod
             if path == null
                 path = ""
             if mod == null
-                mod = parent.mod
-            groups.add({ path: parent.path + path, mod: mod })
-        if tag == "</group>"
-            groups.remove_at(groups.length - 1)
-        if tag.startsWith("<endpoint ")
-            parent = groups[groups.length - 1]
-            endpoint = endpointFromXml(tag)
-            endpoint.path = parent.path + endpoint.path
+                mod = parentMod
+            collectRoutes(child, parentPath + path, mod, routes)
+        if child.tag() == "endpoint"
+            endpoint = endpointFromTag(child)
+            endpoint.path = parentPath + endpoint.path
             if endpoint.mod == null
-                endpoint.mod = parent.mod
+                endpoint.mod = parentMod
             if endpoint.mod == null
                 throw "ApiEndpointRequiresPathModAndFunc"
             if routeMissing(findRoute(routes, endpoint.path)) == false
                 throw "ApiDuplicateEndpointPath"
             routes.add(endpoint)
-    return routes
 
 findRoute(routes, requestPath)
     for routes as route
@@ -69,19 +63,19 @@ routeMissing(route)
     return route == null
 
 test "endpoint XML requires its route fields"
-    endpoint = endpointFromXml(" path=\"/math/add\" mod=\"math\" func=\"add\" />")
+    endpoint = endpointFromTag(xml2obj("<endpoint path=\"/math/add\" mod=\"math\" func=\"add\" />"))
     assert endpoint.path == "/math/add"
     assert endpoint.mod == "math"
     assert endpoint.func == "add"
 
 test "endpoint XML rejects a relative path"
     try
-        endpointFromXml(" path=\"math/add\" mod=\"math\" func=\"add\" />")
+        endpointFromTag(xml2obj("<endpoint path=\"math/add\" mod=\"math\" func=\"add\" />"))
         assert false
     catch error
         assert error == "ApiEndpointPathMustStartWithSlash"
 
 test "groups inherit path and module"
-    routes = routesFromXml("<api>\n  <group path=\"/math\" mod=\"math\">\n    <endpoint path=\"/add\" func=\"add\" />\n  </group>\n</api>")
+    routes = routesFromXml("<api><group path=\"/math\" mod=\"math\"><endpoint path=\"/add\" func=\"add\" /></group></api>")
     assert routes[0].path == "/math/add"
     assert routes[0].mod == "math"

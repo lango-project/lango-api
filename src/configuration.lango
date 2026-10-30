@@ -3,7 +3,6 @@ import js "node:process" as process
 
 export defaultConfiguration(applicationName)
 export loadConfiguration(applicationName, configurationFile, paths)
-export attribute(xml, name)
 
 defaultConfiguration(applicationName)
     return {
@@ -12,16 +11,25 @@ defaultConfiguration(applicationName)
         port: 3000
     }
 
-attribute(xml, name)
-    prefix = "${name}=\""
-    start = xml.indexOf(prefix)
-    if start < 0
-        return null
-    valueStart = start + prefix.length
-    valueEnd = xml.indexOf("\"", valueStart)
-    if valueEnd < 0
-        return null
-    return xml.slice(valueStart, valueEnd)
+applyXmlConfiguration(configuration, xml)
+    conf = xml2obj(xml)
+    http = conf.http
+    configuredPaths = conf.paths
+    if http != null
+        if http.host != null
+            configuration.host = http.host
+        if http.port != null
+            configuration.port = to_js_number($(http.port))
+    if configuredPaths != null
+        if configuredPaths.appRoot != null
+            configuration.appRoot = configuredPaths.appRoot
+        if configuredPaths.dataDir != null
+            configuration.dataDir = configuredPaths.dataDir
+        if configuredPaths.stateDir != null
+            configuration.stateDir = configuredPaths.stateDir
+        if configuredPaths.logDir != null
+            configuration.logDir = configuredPaths.logDir
+    return configuration
 
 loadConfiguration(applicationName, configurationFile, paths)
     configuration = defaultConfiguration(applicationName)
@@ -32,33 +40,17 @@ loadConfiguration(applicationName, configurationFile, paths)
 
     if fs.existsSync(configurationFile)
         xml = fs.readFileSync(configurationFile, "utf8")
-        host = attribute(xml, "host")
-        port = attribute(xml, "port")
-        appRoot = attribute(xml, "appRoot")
-        dataDir = attribute(xml, "dataDir")
-        stateDir = attribute(xml, "stateDir")
-        logDir = attribute(xml, "logDir")
-        if host != null
-            configuration.host = host
-        if port != null
-            configuration.port = to_js_number($(port))
-        if appRoot != null
-            configuration.appRoot = appRoot
-        if dataDir != null
-            configuration.dataDir = dataDir
-        if stateDir != null
-            configuration.stateDir = stateDir
-        if logDir != null
-            configuration.logDir = logDir
+        applyXmlConfiguration(configuration, xml)
 
-    if process.env.LANGO_HOST != null
+    if is_string(process.env.LANGO_HOST)
         configuration.host = process.env.LANGO_HOST
-    if process.env.LANGO_PORT != null
+    if is_string(process.env.LANGO_PORT)
         configuration.port = to_js_number($(process.env.LANGO_PORT))
     return configuration
 
-test "configuration attribute reads a quoted XML attribute"
-    assert attribute("<http host=\"127.0.0.1\" port=\"3000\" />", "host") == "127.0.0.1"
-
-test "configuration attribute returns null when absent"
-    assert attribute("<http port=\"3000\" />", "host") == null
+test "configuration reads XML properties"
+    configuration = defaultConfiguration("shop")
+    applyXmlConfiguration(configuration, "<conf><http host=\"0.0.0.0\" port=\"3010\" /><paths appRoot=\"/app\" dataDir=\"/data\" stateDir=\"/state\" logDir=\"/log\" /></conf>")
+    assert configuration.host == "0.0.0.0"
+    assert configuration.port == 3010
+    assert configuration.dataDir == "/data"
