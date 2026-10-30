@@ -6,13 +6,14 @@ export loadRoutes(apiFile)
 export findRoute(routes, requestPath)
 export endpointFromXml(xml)
 export routeMissing(route)
+export routesFromXml(xml)
 
 endpointFromXml(xml)
     path = attribute(xml, "path")
     mod = attribute(xml, "mod")
     func = attribute(xml, "func")
-    if path == null or mod == null or func == null
-        throw "ApiEndpointRequiresPathModAndFunc"
+    if path == null or func == null
+        throw "ApiEndpointRequiresPathAndFunc"
     if path[0] != "/"
         throw "ApiEndpointPathMustStartWithSlash"
     return {
@@ -25,11 +26,34 @@ loadRoutes(apiFile)
     if fs.existsSync(apiFile) == false
         throw "ApiFileNotFound"
     xml = fs.readFileSync(apiFile, "utf8")
-    parts = xml.split("<endpoint")
+    return routesFromXml(xml)
+
+routesFromXml(xml)
+    lines = xml.split("\n")
     routes = []
-    for parts as part
-        if part.indexOf("/>") >= 0
-            endpoint = endpointFromXml(part)
+    groups = [{ path: "", mod: null }]
+    parent = null
+    for lines as line
+        tag = line.trim()
+        if tag.startsWith("<group ")
+            parent = groups[groups.length - 1]
+            path = attribute(tag, "path")
+            mod = attribute(tag, "mod")
+            if path == null
+                path = ""
+            if mod == null
+                mod = parent.mod
+            groups.add({ path: parent.path + path, mod: mod })
+        if tag == "</group>"
+            groups.remove_at(groups.length - 1)
+        if tag.startsWith("<endpoint ")
+            parent = groups[groups.length - 1]
+            endpoint = endpointFromXml(tag)
+            endpoint.path = parent.path + endpoint.path
+            if endpoint.mod == null
+                endpoint.mod = parent.mod
+            if endpoint.mod == null
+                throw "ApiEndpointRequiresPathModAndFunc"
             if routeMissing(findRoute(routes, endpoint.path)) == false
                 throw "ApiDuplicateEndpointPath"
             routes.add(endpoint)
@@ -56,3 +80,8 @@ test "endpoint XML rejects a relative path"
         assert false
     catch error
         assert error == "ApiEndpointPathMustStartWithSlash"
+
+test "groups inherit path and module"
+    routes = routesFromXml("<api>\n  <group path=\"/math\" mod=\"math\">\n    <endpoint path=\"/add\" func=\"add\" />\n  </group>\n</api>")
+    assert routes[0].path == "/math/add"
+    assert routes[0].mod == "math"
