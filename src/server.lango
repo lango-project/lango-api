@@ -3,6 +3,8 @@ import js "node:http" as http
 import "./api_registry"
     findRoute(routes, requestPath)
     routeMissing(route)
+import "./package_modules"
+    resolveModule(appRoot, moduleName)
 
 export start(configuration, routes)
 
@@ -52,7 +54,7 @@ start(configuration, routes)
                 response.end("{\"error\":\"BadRequest\"}")
                 return
             try
-                moduleFile = appRoot + "/app/" + route.mod + ".mjs"
+                moduleFile = resolveModule(appRoot, route.mod)
                 import_module(moduleFile).then((module)
                     capture input, response, route
                     result = module[route.func](input)

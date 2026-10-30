@@ -10,6 +10,8 @@ import "./server"
     start(configuration, routes)
 import "./api_registry"
     loadRoutes(apiFile)
+import "./package_modules"
+    prepareLinkedPackages(appRoot, routes)
 
 export main(args)
 
@@ -27,5 +29,6 @@ main(args)
           paths = developmentPaths(applicationName, os.homedir(), process.env.LOCALAPPDATA, process.platform)
     configuration = loadConfiguration(applicationName, paths.configFile, paths)
     routes = loadRoutes(configuration.appRoot + "/deploy/api.xml")
+    prepareLinkedPackages(configuration.appRoot, routes)
     start(configuration, routes)
     log.info("lango-api listening on ${configuration.host}:${configuration.port}")

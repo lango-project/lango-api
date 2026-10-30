@@ -1,0 +1,71 @@
+import js "node:child_process" as childProcess
+import js "node:fs" as fs
+import js "node:module" as nodeModule
+import js "node:path" as path
+import js "node:process" as process
+
+export prepareLinkedPackages(appRoot, routes)
+export resolveModule(appRoot, moduleName)
+
+packageDirectory(appRoot, moduleName)
+    return path.join(appRoot, "node_modules", moduleName)
+
+langoBuild(packageManifest)
+    if is_object(packageManifest.lango) == false
+        return null
+    settings = packageManifest.lango
+    if is_string(settings.source) == false or is_string(settings.output) == false
+        throw "LangoPackageManifestRequiresSourceAndOutput"
+    if is_object(packageManifest.scripts) == false or is_string(packageManifest.scripts.build) == false
+        throw "LangoLinkedPackageRequiresBuildScript"
+    return settings
+
+buildLinkedPackage(appRoot, moduleName)
+    directory = packageDirectory(appRoot, moduleName)
+    if fs.existsSync(directory) == false
+        throw "LangoPackageNotInstalled: ${moduleName}"
+    if fs.lstatSync(directory).isSymbolicLink() == false
+        return null
+    manifestFile = path.join(directory, "package.json")
+    if fs.existsSync(manifestFile) == false
+        throw "LangoLinkedPackageManifestNotFound: ${moduleName}"
+    manifest = from_json(fs.readFileSync(manifestFile, "utf8"))
+    settings = langoBuild(manifest)
+    if settings == null
+        return null
+    npm = "npm"
+    if process.platform == "win32"
+        npm = "npm.cmd"
+    childProcess/execFileSync(npm, ["run", "build"], {
+        cwd: directory,
+        stdio: "inherit"
+    })
+    if fs.existsSync(path.join(directory, settings.output)) == false
+        throw "LangoLinkedPackageBuildDidNotProduceOutput: ${moduleName}"
+    return null
+
+prepareLinkedPackages(appRoot, routes)
+    prepared = []
+    for routes as route
+        if prepared.includes(route.mod) == false
+            buildLinkedPackage(appRoot, route.mod)
+            prepared.add(route.mod)
+    return null
+
+resolveModule(appRoot, moduleName)
+    resolver = nodeModule/createRequire(path.join(appRoot, "package.json"))
+    return resolver.resolve(moduleName)
+
+test "Lango package manifests require a source, output and build script"
+    settings = langoBuild({
+        lango: { source: "src/index.lango", output: "dist/index.mjs" },
+        scripts: { build: "lango build src/index.lango --out dist/index.mjs" }
+    })
+    assert settings.source == "src/index.lango"
+    assert settings.output == "dist/index.mjs"
+
+test "ordinary npm package manifests do not request a Lango build"
+    assert langoBuild({ name: "ordinary-package" }) == null
+
+test "module resolution uses the application package context"
+    assert resolveModule("/tmp/lango-app", "node:fs") == "node:fs"
