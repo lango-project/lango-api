@@ -1,4 +1,6 @@
+import js "node:crypto" as crypto
 import js "node:http" as http
+import js "node:util" as util
 
 import "./api_registry"
     findRoute(routes, requestPath)
@@ -8,87 +10,182 @@ import "./package_modules"
 
 export start(configuration, routes)
 
-sendResult(response, result)
-    response.writeHead(200, {
-        "Content-Type": "application/json; charset=utf-8"
-    })
-    response.end(to_json(result))
+class ApiResponse
+    methods
+        status(code)
+        header(name, value)
+        send(value)
+        completed()
+
+class RequestLog
+    methods
+        debug(message)
+        info(message)
+        warn(message)
+        err(message)
+
+ApiResponse(httpResponse)
+    @httpResponse = httpResponse
+    @statusCode = 200
+    @completed = false
+
+ApiResponse:status(code)
+    if not is_number(code) or code < 100 or code > 599 or code % 1 != 0
+        throw "ApiResponseStatusMustBeAnIntegerBetween100And599"
+    if @completed
+        throw "ApiResponseAlreadySent"
+    @statusCode = code
+    return this
+
+ApiResponse:header(name, value)
+    if not is_string(name) or name == ""
+        throw "ApiResponseHeaderNameMustBeAString"
+    if @completed
+        throw "ApiResponseAlreadySent"
+    httpResponse = @httpResponse
+    httpResponse.setHeader(name, value)
+    return this
+
+ApiResponse:send(value)
+    if @completed
+        throw "ApiResponseAlreadySent"
+    httpResponse = @httpResponse
+    if httpResponse.getHeader("Content-Type") == null
+        httpResponse.setHeader("Content-Type", "application/json; charset=utf-8")
+    httpResponse.statusCode = @statusCode
+    @completed = true
+    httpResponse.end(to_json(value))
+    return null
+
+ApiResponse:completed()
+    return @completed
+
+RequestLog(base, requestId)
+    @base = base
+    @requestId = requestId
+
+RequestLog:debug(message)
+    base = @base
+    requestId = @requestId
+    base.debug("[${requestId}] ${message}")
+    return null
+
+RequestLog:info(message)
+    base = @base
+    requestId = @requestId
+    base.info("[${requestId}] ${message}")
+    return null
+
+RequestLog:warn(message)
+    base = @base
+    requestId = @requestId
+    base.warn("[${requestId}] ${message}")
+    return null
+
+RequestLog:err(message)
+    base = @base
+    requestId = @requestId
+    base.err("[${requestId}] ${message}")
+    return null
+
+requestContext(httpRequest, requestId)
+    return {
+        id: requestId,
+        method: httpRequest.method,
+        path: httpRequest.url,
+        headers: httpRequest.headers,
+        remoteAddress: httpRequest.socket.remoteAddress
+    }
+
+anonymousToken()
+    return { auth: false }
+
+sendFailure(response, log, request)
+    log.err("${request.method} ${request.path}: handler failed")
+    if not response.completed()
+        response.status(500).send({ error: "InternalServerError", requestId: request.id })
+    return null
+
+sendResult(response, log, request, result)
+    if response.completed()
+        return null
+    if util/types/isPromise(result)
+        result.then((value)
+            capture response
+            if not response.completed()
+                response.send(value)
+        ).catch((error)
+            capture response, log, request
+            sendFailure(response, log, request)
+        )
+        return null
+    response.send(result)
+    return null
 
 start(configuration, routes)
     context log
-    server = new http/Server((request, response)
-        capture configuration, routes, log
-        if request.method != "POST"
-            log.warn("${request.method} ${request.url}: method is not allowed")
-            response.writeHead(405, {
-                "Content-Type": "application/json; charset=utf-8"
-            })
-            response.end("{\"error\":\"MethodNotAllowed\"}")
+    server = new http/Server((httpRequest, httpResponse)
+        capture configuration, routes, log, crypto
+        requestId = crypto/randomUUID()
+        requestLog = new RequestLog(log, requestId)
+        apiRequest = requestContext(httpRequest, requestId)
+        apiResponse = new ApiResponse(httpResponse)
+        apiToken = anonymousToken()
+        context log = requestLog
+        context request = apiRequest
+        context response = apiResponse
+        context token = apiToken
+        if httpRequest.method != "POST"
+            requestLog.warn("${apiRequest.method} ${apiRequest.path}: method is not allowed")
+            apiResponse.status(405).send({ error: "MethodNotAllowed", requestId: apiRequest.id })
             return
-        if request.url.indexOf("?") >= 0
-            log.warn("${request.method} ${request.url}: query parameters are not supported")
-            response.writeHead(400, {
-                "Content-Type": "application/json; charset=utf-8"
-            })
-            response.end("{\"error\":\"QueryNotSupported\"}")
+        if apiRequest.path.indexOf("?") >= 0
+            requestLog.warn("${apiRequest.method} ${apiRequest.path}: query parameters are not supported")
+            apiResponse.status(400).send({ error: "QueryNotSupported", requestId: apiRequest.id })
             return
-        route = findRoute(routes, request.url)
+        route = findRoute(routes, apiRequest.path)
         if routeMissing(route)
-            log.warn("${request.method} ${request.url}: route was not found")
-            response.writeHead(404, {
-                "Content-Type": "application/json; charset=utf-8"
-            })
-            response.end("{\"error\":\"RouteNotFound\"}")
+            requestLog.warn("${apiRequest.method} ${apiRequest.path}: route was not found")
+            apiResponse.status(404).send({ error: "RouteNotFound", requestId: apiRequest.id })
             return
         body = ""
         appRoot = configuration.appRoot
-        request.on("data", (chunk)
+        httpRequest.on("data", (chunk)
             capture body
             body = body + chunk.toString()
         )
-        request.on("end", ()
-            capture appRoot, route, response, body, log, request
+        httpRequest.on("end", ()
+            capture appRoot, route, apiResponse, apiRequest, requestLog, request, response, token, log, body
             input = {}
             try
                 if body != ""
                     input = from_json(body)
             catch error
-                log.warn("${request.method} ${request.url}: invalid JSON request body")
-                response.writeHead(400, {
-                    "Content-Type": "application/json; charset=utf-8"
-                })
-                response.end("{\"error\":\"BadRequest\"}")
+                requestLog.warn("${apiRequest.method} ${apiRequest.path}: invalid JSON request body")
+                apiResponse.status(400).send({ error: "BadRequest", requestId: apiRequest.id })
                 return
             try
                 handler = route.handler
                 if not routeMissing(handler)
                     result = route.handler(input)
-                    sendResult(response, result)
+                    sendResult(apiResponse, requestLog, apiRequest, result)
                     return
                 module = route.module
                 if not routeMissing(module)
                     result = module[route.func](input)
-                    sendResult(response, result)
+                    sendResult(apiResponse, requestLog, apiRequest, result)
                     return
                 moduleFile = resolveModule(appRoot, route.mod)
                 import_module(moduleFile).then((module)
-                    capture input, response, route
+                    capture input, apiResponse, apiRequest, requestLog, response, request, token, log, route
                     result = module[route.func](input)
-                    sendResult(response, result)
+                    sendResult(apiResponse, requestLog, apiRequest, result)
                 ).catch((error)
-                    capture response, log, request
-                    log.err("${request.method} ${request.url}: handler failed")
-                    response.writeHead(500, {
-                        "Content-Type": "application/json; charset=utf-8"
-                    })
-                    response.end("{\"error\":\"InternalServerError\"}")
+                    capture apiResponse, apiRequest, requestLog, response, request, log
+                    sendFailure(apiResponse, requestLog, apiRequest)
                 )
             catch error
-                log.err("${request.method} ${request.url}: handler could not be loaded")
-                response.writeHead(500, {
-                    "Content-Type": "application/json; charset=utf-8"
-                })
-                response.end("{\"error\":\"InternalServerError\"}")
+                sendFailure(apiResponse, requestLog, apiRequest)
         )
     )
     server.on("error", (error)
@@ -97,3 +194,10 @@ start(configuration, routes)
     )
     server.listen(configuration.port, configuration.host)
     return server
+
+test "request context preserves HTTP metadata"
+    httpRequest = { method: "POST", url: "/health", headers: { accept: "application/json" }, socket: { remoteAddress: "127.0.0.1" } }
+    request = requestContext(httpRequest, "request-1")
+    assert request.id == "request-1"
+    assert request.path == "/health"
+    assert request.headers.accept == "application/json"

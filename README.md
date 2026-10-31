@@ -97,6 +97,34 @@ The effective configuration order is command-line options, environment,
 `LANGO_CONFIG`, `LANGO_API`, `LANGO_HOST`, and `LANGO_PORT`. Without an
 explicit API file, the host loads `<appRoot>/deploy/api.xml`.
 
+## Handler contract
+
+An endpoint receives its JSON request body as its only explicit argument. HTTP
+state is available only when the handler declares the corresponding context:
+
+```lango
+export createOrder(input)
+
+createOrder(input)
+    context request
+    context response
+    context token
+    context log
+
+    log.info("Creating an order for ${token.userId}")
+    response.status(201).header("Location", "/orders/42")
+    return { id: 42, requestId: request.id }
+```
+
+`request` provides `id`, `method`, `path`, `headers`, and `remoteAddress`.
+`token` initially contains `{ auth: false }`; authentication will replace or
+enrich it in a later milestone. `log` is request-scoped and includes the
+request id. A normal return value is serialized as a JSON response. A handler
+can call `response.send(value)` to write JSON immediately; a later return value
+is ignored. `response.status(code)` and `response.header(name, value)` apply to
+the next send. Promise results are awaited by the host without requiring
+`await` in Lango source.
+
 ## Application packages
 
 An endpoint `mod` is an npm package specifier, resolved from the application's
