@@ -1,8 +1,19 @@
 import js "node:fs" as fs
-import js "node:process" as process
 
 export defaultConfiguration(applicationName)
 export loadConfiguration(applicationName, configurationFile, paths)
+export applyEnvironmentConfiguration(configuration, environment)
+export applyOptionConfiguration(configuration, options)
+export validateConfiguration(configuration)
+
+parsePort(value)
+    try
+        port = to_js_number($(value))
+    catch error
+        throw "ApiPortMustBeAnIntegerBetween1And65535"
+    if port < 1 or port > 65535 or port % 1 != 0
+        throw "ApiPortMustBeAnIntegerBetween1And65535"
+    return port
 
 defaultConfiguration(applicationName)
     return {
@@ -19,7 +30,7 @@ applyXmlConfiguration(configuration, xml)
         if http.host != null
             configuration.host = http.host
         if http.port != null
-            configuration.port = to_js_number($(http.port))
+            configuration.port = parsePort(http.port)
     if configuredPaths != null
         if configuredPaths.appRoot != null
             configuration.appRoot = configuredPaths.appRoot
@@ -29,6 +40,8 @@ applyXmlConfiguration(configuration, xml)
             configuration.stateDir = configuredPaths.stateDir
         if configuredPaths.logDir != null
             configuration.logDir = configuredPaths.logDir
+        if configuredPaths.apiFile != null
+            configuration.apiFile = configuredPaths.apiFile
     return configuration
 
 loadConfiguration(applicationName, configurationFile, paths)
@@ -42,10 +55,48 @@ loadConfiguration(applicationName, configurationFile, paths)
         xml = fs.readFileSync(configurationFile, "utf8")
         applyXmlConfiguration(configuration, xml)
 
-    if is_string(process.env.LANGO_HOST)
-        configuration.host = process.env.LANGO_HOST
-    if is_string(process.env.LANGO_PORT)
-        configuration.port = to_js_number($(process.env.LANGO_PORT))
+    return configuration
+
+applyEnvironmentConfiguration(configuration, environment)
+    if is_string(environment.LANGO_APP_ROOT)
+        configuration.appRoot = environment.LANGO_APP_ROOT
+    if is_string(environment.LANGO_DATA_DIR)
+        configuration.dataDir = environment.LANGO_DATA_DIR
+    if is_string(environment.LANGO_STATE_DIR)
+        configuration.stateDir = environment.LANGO_STATE_DIR
+    if is_string(environment.LANGO_LOG_DIR)
+        configuration.logDir = environment.LANGO_LOG_DIR
+    if is_string(environment.LANGO_API)
+        configuration.apiFile = environment.LANGO_API
+    if is_string(environment.LANGO_HOST)
+        configuration.host = environment.LANGO_HOST
+    if is_string(environment.LANGO_PORT)
+        configuration.port = parsePort(environment.LANGO_PORT)
+    return configuration
+
+applyOptionConfiguration(configuration, options)
+    if options.appRoot != null
+        configuration.appRoot = options.appRoot
+    if options.dataDir != null
+        configuration.dataDir = options.dataDir
+    if options.stateDir != null
+        configuration.stateDir = options.stateDir
+    if options.logDir != null
+        configuration.logDir = options.logDir
+    if options.apiFile != null
+        configuration.apiFile = options.apiFile
+    if options.host != null
+        configuration.host = options.host
+    if options.port != null
+        configuration.port = parsePort(options.port)
+    return configuration
+
+validateConfiguration(configuration)
+    if not is_string(configuration.appRoot) or configuration.appRoot == ""
+        throw "ApiAppRootMustBeConfigured"
+    if not is_string(configuration.host) or configuration.host == ""
+        throw "ApiHostMustBeConfigured"
+    configuration.port = parsePort(configuration.port)
     return configuration
 
 test "configuration reads XML properties"
@@ -54,3 +105,29 @@ test "configuration reads XML properties"
     assert configuration.host == "0.0.0.0"
     assert configuration.port == 3010
     assert configuration.dataDir == "/data"
+
+test "configuration applies environment then command-line values"
+    configuration = defaultConfiguration("shop")
+    configuration.appRoot = "/default"
+    applyEnvironmentConfiguration(configuration, {
+        LANGO_APP_ROOT: "/environment",
+        LANGO_PORT: "3010"
+    })
+    applyOptionConfiguration(configuration, {
+        appRoot: "/command-line",
+        dataDir: null,
+        stateDir: null,
+        logDir: null,
+        apiFile: null,
+        host: null,
+        port: "3020"
+    })
+    assert configuration.appRoot == "/command-line"
+    assert configuration.port == 3020
+
+test "configuration rejects an invalid port"
+    try
+        parsePort("70000")
+        assert false
+    catch error
+        assert error == "ApiPortMustBeAnIntegerBetween1And65535"

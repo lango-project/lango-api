@@ -1,30 +1,149 @@
 import js "node:os" as os
+import js "node:path" as path
 import js "node:process" as process
 import "./application_paths"
     developmentPaths(applicationName, home, localAppData, platform)
     serverPaths(applicationName, programData, programFiles, platform)
 import "./configuration"
-    defaultConfiguration(applicationName)
+    applyEnvironmentConfiguration(configuration, environment)
+    applyOptionConfiguration(configuration, options)
     loadConfiguration(applicationName, configurationFile, paths)
+    validateConfiguration(configuration)
 import "./library"
     class Host
 
 export main(args)
+export parseArguments(args)
+export selectPaths(applicationName, mode, home, localAppData, platform, programData, programFiles)
+export configurationFileFor(paths, options, environment)
+export apiFileFor(configuration, options, environment)
+
+usage()
+    return "Usage: lango-api <app> [development|server] [--app-root <path>] [--data-dir <path>] [--state-dir <path>] [--log-dir <path>] [--config <file>] [--api <file>] [--host <host>] [--port <port>]"
+
+newOptions(applicationName)
+    return {
+        applicationName: applicationName,
+        mode: "development",
+        appRoot: null,
+        dataDir: null,
+        stateDir: null,
+        logDir: null,
+        configFile: null,
+        apiFile: null,
+        host: null,
+        port: null
+    }
+
+setOption(options, option, value)
+    if option == "--app-root"
+        options.appRoot = value
+    if option == "--data-dir"
+        options.dataDir = value
+    if option == "--state-dir"
+        options.stateDir = value
+    if option == "--log-dir"
+        options.logDir = value
+    if option == "--config"
+        options.configFile = value
+    if option == "--api"
+        options.apiFile = value
+    if option == "--host"
+        options.host = value
+    if option == "--port"
+        options.port = value
+    return options
+
+knownOption(option)
+    return option == "--app-root" or option == "--data-dir" or option == "--state-dir" or option == "--log-dir" or option == "--config" or option == "--api" or option == "--host" or option == "--port"
+
+parseArguments(args)
+    if args.length == 0
+        throw usage()
+    applicationName = args[0]
+    if applicationName == ""
+        throw "ApiApplicationNameMustNotBeEmpty"
+    options = newOptions(applicationName)
+    pendingOption = null
+    for args as index: argument
+        if index > 0
+            if pendingOption != null
+                setOption(options, pendingOption, argument)
+                pendingOption = null
+              else
+                  if argument == "development" or argument == "server"
+                      options.mode = argument
+                    else
+                        if knownOption(argument)
+                            pendingOption = argument
+                          else
+                              throw "ApiUnknownArgument: ${argument}"
+    if pendingOption != null
+        throw "ApiOptionRequiresValue: ${pendingOption}"
+    return options
+
+selectPaths(applicationName, mode, home, localAppData, platform, programData, programFiles)
+    if mode == "development"
+        return developmentPaths(applicationName, home, localAppData, platform)
+    if mode == "server"
+        return serverPaths(applicationName, programData, programFiles, platform)
+    throw "ApiUnknownMode: ${mode}"
+
+configurationFileFor(paths, options, environment)
+    configurationFile = paths.configFile
+    if is_string(environment.LANGO_CONFIG)
+        configurationFile = environment.LANGO_CONFIG
+    if options.configFile != null
+        configurationFile = options.configFile
+    return configurationFile
+
+apiFileFor(configuration, options, environment)
+    apiFile = path.join(configuration.appRoot, "deploy", "api.xml")
+    if is_string(configuration.apiFile)
+        apiFile = configuration.apiFile
+    if is_string(environment.LANGO_API)
+        apiFile = environment.LANGO_API
+    if options.apiFile != null
+        apiFile = options.apiFile
+    return apiFile
 
 main(args)
     context log
-    if args.length == 0
-        log.err("Usage: lango-api <app> [development|server]")
-        return null
+    try
+        options = parseArguments(args)
+        paths = selectPaths(options.applicationName, options.mode, os.homedir(), process.env.LOCALAPPDATA, process.platform, process.env.ProgramData, process.env.ProgramFiles)
+        configurationFile = configurationFileFor(paths, options, process.env)
+        configuration = loadConfiguration(options.applicationName, configurationFile, paths)
+        applyEnvironmentConfiguration(configuration, process.env)
+        applyOptionConfiguration(configuration, options)
+        validateConfiguration(configuration)
+        apiFile = apiFileFor(configuration, options, process.env)
+        host = new Host(configuration)
+        host.routesFromXml(apiFile)
+        host.start()
+        log.info("lango-api listening on ${configuration.host}:${configuration.port}")
+    catch error
+        log.err("lango-api: ${error}")
+        process.exitCode = 1
+    return null
 
-    applicationName = args[0]
-    mode = args[1]
-    if mode == "server"
-        paths = serverPaths(applicationName, process.env.ProgramData, process.env.ProgramFiles, process.platform)
-      else
-          paths = developmentPaths(applicationName, os.homedir(), process.env.LOCALAPPDATA, process.platform)
-    configuration = loadConfiguration(applicationName, paths.configFile, paths)
-    host = new Host(configuration)
-    host.routesFromXml(configuration.appRoot + "/deploy/api.xml")
-    host.start()
-    log.info("lango-api listening on ${configuration.host}:${configuration.port}")
+test "CLI parses its mode and explicit paths"
+    options = parseArguments(["shop", "server", "--app-root", "/app", "--port", "3010"])
+    assert options.applicationName == "shop"
+    assert options.mode == "server"
+    assert options.appRoot == "/app"
+    assert options.port == "3010"
+
+test "CLI gives explicit configuration precedence"
+    paths = { configFile: "/default/conf.xml" }
+    options = newOptions("shop")
+    options.configFile = "/cli/conf.xml"
+    configurationFile = configurationFileFor(paths, options, { LANGO_CONFIG: "/environment/conf.xml" })
+    assert configurationFile == "/cli/conf.xml"
+
+test "CLI derives api.xml after app-root overrides"
+    options = newOptions("shop")
+    configuration = { appRoot: "/app", apiFile: null }
+    assert apiFileFor(configuration, options, {}) == "/app/deploy/api.xml"
+    options.apiFile = "/cli/api.xml"
+    assert apiFileFor(configuration, options, { LANGO_API: "/environment/api.xml" }) == "/cli/api.xml"

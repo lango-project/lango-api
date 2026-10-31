@@ -77,11 +77,25 @@ The initial `conf.xml` format is:
     appRoot="/optional/application/root"
     dataDir="/optional/data"
     stateDir="/optional/state"
-    logDir="/optional/logs" />
+    logDir="/optional/logs"
+    apiFile="/optional/api.xml" />
 </conf>
 ```
 
-All attributes are optional. `LANGO_HOST` and `LANGO_PORT` environment variables override `conf.xml`; command-line directory overrides will be added with the route host.
+All attributes are optional. The CLI defaults to development mode:
+
+```sh
+lango-api <app> [development|server] \
+  [--app-root <path>] [--data-dir <path>] [--state-dir <path>] \
+  [--log-dir <path>] [--config <file>] [--api <file>] \
+  [--host <host>] [--port <port>]
+```
+
+The effective configuration order is command-line options, environment,
+`conf.xml`, then mode-specific defaults. The environment names are
+`LANGO_APP_ROOT`, `LANGO_DATA_DIR`, `LANGO_STATE_DIR`, `LANGO_LOG_DIR`,
+`LANGO_CONFIG`, `LANGO_API`, `LANGO_HOST`, and `LANGO_PORT`. Without an
+explicit API file, the host loads `<appRoot>/deploy/api.xml`.
 
 ## Application packages
 
