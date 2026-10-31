@@ -11,23 +11,23 @@ packageDirectory(appRoot, moduleName)
     return path.join(appRoot, "node_modules", moduleName)
 
 langoBuild(packageManifest)
-    if is_object(packageManifest.lango) == false
+    if not is_object(packageManifest.lango)
         return null
     settings = packageManifest.lango
-    if is_string(settings.source) == false or is_string(settings.output) == false
+    if not is_string(settings.source) or not is_string(settings.output)
         throw "LangoPackageManifestRequiresSourceAndOutput"
-    if is_object(packageManifest.scripts) == false or is_string(packageManifest.scripts.build) == false
+    if not is_object(packageManifest.scripts) or not is_string(packageManifest.scripts.build)
         throw "LangoLinkedPackageRequiresBuildScript"
     return settings
 
 buildLinkedPackage(appRoot, moduleName)
     directory = packageDirectory(appRoot, moduleName)
-    if fs.existsSync(directory) == false
+    if not fs.existsSync(directory)
         throw "LangoPackageNotInstalled: ${moduleName}"
-    if fs.lstatSync(directory).isSymbolicLink() == false
+    if not fs.lstatSync(directory).isSymbolicLink()
         return null
     manifestFile = path.join(directory, "package.json")
-    if fs.existsSync(manifestFile) == false
+    if not fs.existsSync(manifestFile)
         throw "LangoLinkedPackageManifestNotFound: ${moduleName}"
     manifest = from_json(fs.readFileSync(manifestFile, "utf8"))
     settings = langoBuild(manifest)
@@ -40,14 +40,14 @@ buildLinkedPackage(appRoot, moduleName)
         cwd: directory,
         stdio: "inherit"
     })
-    if fs.existsSync(path.join(directory, settings.output)) == false
+    if not fs.existsSync(path.join(directory, settings.output))
         throw "LangoLinkedPackageBuildDidNotProduceOutput: ${moduleName}"
     return null
 
 prepareLinkedPackages(appRoot, routes)
     prepared = []
     for routes as route
-        if prepared.includes(route.mod) == false
+        if is_string(route.mod) and not prepared.includes(route.mod)
             buildLinkedPackage(appRoot, route.mod)
             prepared.add(route.mod)
     return null

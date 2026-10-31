@@ -1,0 +1,107 @@
+import "./api_registry"
+    addRoute(routes, endpoint)
+    createEndpoint(options)
+    loadRoutes(apiFile)
+import "./package_modules"
+    prepareLinkedPackages(appRoot, routes)
+import "./server"
+    alias startServer = start(configuration, routes)
+
+export class Host
+    methods
+        routes(routes)
+        routesFromXml(apiFile)
+        start()
+
+export class Routes
+    methods
+        endpoint(options)
+        group(options)
+        values()
+
+Host(configuration)
+    @configuration = configuration
+    @routes = null
+
+Host:routes(routes)
+    @routes = routes.values()
+    return this
+
+Host:routesFromXml(apiFile)
+    @routes = loadRoutes(apiFile)
+    return this
+
+Host:start()
+    if @routes == null
+        throw "ApiRoutesNotConfigured"
+    configuration = @configuration
+    routes = @routes
+    prepareLinkedPackages(configuration.appRoot, routes)
+    return startServer(configuration, routes)
+
+Routes()
+    @items = []
+
+Routes:endpoint(options)
+    addRoute(@items, createEndpoint(options))
+    return this
+
+Routes:group(options)
+    if not is_object(options)
+        throw "ApiGroupMustBeMap"
+    path = options.path
+    mod = options.module
+    if path == null
+        throw "ApiGroupRequiresPath"
+    if path[0] != "/"
+        throw "ApiGroupPathMustStartWithSlash"
+    return new RouteGroup(@items, path, mod)
+
+Routes:values()
+    return @items
+
+class RouteGroup
+    methods
+        endpoint(options)
+        group(options)
+
+RouteGroup(items, path, mod)
+    @items = items
+    @path = path
+    @mod = mod
+
+RouteGroup:endpoint(options)
+    endpoint = createEndpoint(options)
+    endpoint.path = @path + endpoint.path
+    if endpoint.mod == null and endpoint.module == null
+        if is_string(@mod)
+            endpoint.mod = @mod
+          else
+              endpoint.module = @mod
+    addRoute(@items, endpoint)
+    return this
+
+RouteGroup:group(options)
+    if not is_object(options)
+        throw "ApiGroupMustBeMap"
+    path = options.path
+    mod = options.module
+    if path == null
+        throw "ApiGroupRequiresPath"
+    if path[0] != "/"
+        throw "ApiGroupPathMustStartWithSlash"
+    if mod == null
+        mod = @mod
+    return new RouteGroup(@items, @path + path, mod)
+
+test "route builder groups paths and modules"
+    routes = new Routes()
+    math = routes.group({ path: "/math", module: "@shop/math" })
+    math.endpoint({ path: "/add", function: "add" })
+    admin = math.group({ path: "/admin", module: "@shop/admin" })
+    admin.endpoint({ path: "/status", function: "status" })
+    values = routes.values()
+    assert values[0].path == "/math/add"
+    assert values[0].mod == "@shop/math"
+    assert values[1].path == "/math/admin/status"
+    assert values[1].mod == "@shop/admin"

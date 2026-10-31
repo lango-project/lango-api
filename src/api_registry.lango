@@ -3,25 +3,56 @@ import js "node:fs" as fs
 export loadRoutes(apiFile)
 export findRoute(routes, requestPath)
 export endpointFromTag(tag)
+export createEndpoint(options)
+export addRoute(routes, endpoint)
 export routeMissing(route)
 export routesFromXml(xml)
 
 endpointFromTag(tag)
-    path = tag.path
-    mod = tag.mod
-    func = tag.func
+    return createEndpoint({
+        path: tag.path,
+        module: tag.mod,
+        function: tag.func
+    })
+
+createEndpoint(options)
+    if not is_object(options)
+        throw "ApiEndpointMustBeMap"
+    path = options.path
+    mod = options.module
+    func = options.function
     if path == null or func == null
         throw "ApiEndpointRequiresPathAndFunc"
     if path[0] != "/"
         throw "ApiEndpointPathMustStartWithSlash"
+    moduleName = null
+    moduleValue = mod
+    if is_string(mod)
+        moduleName = mod
+        moduleValue = null
+    functionName = null
+    handler = func
+    if is_string(func)
+        functionName = func
+        handler = null
     return {
         path: path,
-        mod: mod,
-        func: func
+        mod: moduleName,
+        func: functionName,
+        module: moduleValue,
+        handler: handler
     }
 
+addRoute(routes, endpoint)
+    if endpoint.func != null and endpoint.mod == null and endpoint.module == null
+        throw "ApiEndpointStringFunctionRequiresModule"
+    if not routeMissing(findRoute(routes, endpoint.path))
+        throw "ApiDuplicateEndpointPath"
+    routes.add(endpoint)
+    return endpoint
+
 loadRoutes(apiFile)
-    if fs.existsSync(apiFile) == false
+    if not fs.existsSync(apiFile)
         throw "ApiFileNotFound"
     xml = fs.readFileSync(apiFile, "utf8")
     return routesFromXml(xml)
@@ -45,13 +76,11 @@ collectRoutes(tag, parentPath, parentMod, routes)
         if child.tag() == "endpoint"
             endpoint = endpointFromTag(child)
             endpoint.path = parentPath + endpoint.path
-            if endpoint.mod == null
+            if endpoint.mod == null and endpoint.module == null
                 endpoint.mod = parentMod
-            if endpoint.mod == null
+            if endpoint.mod == null and endpoint.module == null and endpoint.handler == null
                 throw "ApiEndpointRequiresPathModAndFunc"
-            if routeMissing(findRoute(routes, endpoint.path)) == false
-                throw "ApiDuplicateEndpointPath"
-            routes.add(endpoint)
+            addRoute(routes, endpoint)
 
 findRoute(routes, requestPath)
     for routes as route
@@ -74,6 +103,14 @@ test "endpoint XML rejects a relative path"
         assert false
     catch error
         assert error == "ApiEndpointPathMustStartWithSlash"
+
+test "endpoint maps retain direct module and handler references"
+    handler = (input)
+        return input
+    module = { add: handler }
+    endpoint = createEndpoint({ path: "/direct", module: module, function: handler })
+    assert endpoint.module == module
+    assert endpoint.handler == handler
 
 test "groups inherit path and module"
     routes = routesFromXml("<api><group path=\"/math\" mod=\"math\"><endpoint path=\"/add\" func=\"add\" /></group></api>")

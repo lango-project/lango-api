@@ -19,6 +19,51 @@ Source code and tests are `.lango` files. JavaScript generated from them is publ
 
 The package is built as an executable Lango artifact: its generated entry invokes the exported `main(args)` function without a handwritten JavaScript bootstrap.
 
+## Library API
+
+The package can also be used as a library. `Host` owns the API lifecycle and
+`Routes` builds routes without XML:
+
+```lango
+import js "@lango-project/lango-api" as api
+
+host = new api/Host({
+    appRoot: appRoot,
+    host: "127.0.0.1",
+    port: 3000
+})
+
+routes = new api/Routes()
+routes.endpoint({
+    path: "/health",
+    module: "@shop/health",
+    function: "check"
+})
+
+math = routes.group({ path: "/math", module: "@shop/math" })
+math.endpoint({ path: "/add", function: "add" })
+
+host.routes(routes)
+host.start()
+```
+
+`host.routesFromXml(apiFile)` is the equivalent XML-based route configuration.
+The CLI is a thin bootstrap over this same API.
+
+Route maps can also hold a module object or a handler function directly. These
+forms bypass npm resolution and are intended for modules that are already
+available to the application:
+
+```lango
+routes.endpoint({
+    path: "/local",
+    function: localHandler
+})
+```
+
+Linked-package rebuilding requires a string package specifier, so the string
+form remains the standard development route form.
+
 ## Configuration
 
 Configuration is optional. Without a configuration file, the host listens on `127.0.0.1:3000` and uses the documented development or server directory defaults.

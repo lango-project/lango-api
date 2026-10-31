@@ -8,6 +8,12 @@ import "./package_modules"
 
 export start(configuration, routes)
 
+sendResult(response, result)
+    response.writeHead(200, {
+        "Content-Type": "application/json; charset=utf-8"
+    })
+    response.end(to_json(result))
+
 start(configuration, routes)
     context log
     server = new http/Server((request, response)
@@ -54,14 +60,21 @@ start(configuration, routes)
                 response.end("{\"error\":\"BadRequest\"}")
                 return
             try
+                handler = route.handler
+                if not routeMissing(handler)
+                    result = route.handler(input)
+                    sendResult(response, result)
+                    return
+                module = route.module
+                if not routeMissing(module)
+                    result = module[route.func](input)
+                    sendResult(response, result)
+                    return
                 moduleFile = resolveModule(appRoot, route.mod)
                 import_module(moduleFile).then((module)
                     capture input, response, route
                     result = module[route.func](input)
-                    response.writeHead(200, {
-                        "Content-Type": "application/json; charset=utf-8"
-                    })
-                    response.end(to_json(result))
+                    sendResult(response, result)
                 ).catch((error)
                     capture response, log, request
                     log.err("${request.method} ${request.url}: handler failed")

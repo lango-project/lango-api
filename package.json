@@ -10,6 +10,9 @@
   "bin": {
     "lango-api": "dist/cli.mjs"
   },
+  "exports": {
+    ".": "./dist/library.mjs"
+  },
   "lango": {
     "source": "src/cli.lango",
     "output": "dist/cli.mjs"
