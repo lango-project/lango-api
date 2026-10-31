@@ -4,6 +4,7 @@ import "./api_registry"
     loadRoutes(apiFile)
 import "./package_modules"
     prepareLinkedPackages(appRoot, routes)
+    validateRouteModules(appRoot, routes)
 import "./server"
     alias startServer = start(configuration, routes)
 
@@ -37,7 +38,10 @@ Host:start()
     configuration = @configuration
     routes = @routes
     prepareLinkedPackages(configuration.appRoot, routes)
-    return startServer(configuration, routes)
+    return validateRouteModules(configuration.appRoot, routes).then(()
+        capture configuration, routes
+        return startServer(configuration, routes)
+    )
 
 Routes()
     @items = []

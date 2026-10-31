@@ -9,6 +9,7 @@ export routeMissing(route)
 export routesFromXml(xml)
 
 endpointFromTag(tag)
+    validateAttributes(tag, ["path", "mod", "func"])
     return createEndpoint({
         path: tag.path,
         module: tag.mod,
@@ -21,7 +22,7 @@ createEndpoint(options)
     path = options.path
     mod = options.module
     func = options.function
-    if path == null or func == null
+    if not is_string(path) or path == "" or func == null
         throw "ApiEndpointRequiresPathAndFunc"
     if path[0] != "/"
         throw "ApiEndpointPathMustStartWithSlash"
@@ -53,19 +54,33 @@ addRoute(routes, endpoint)
 
 loadRoutes(apiFile)
     if not fs.existsSync(apiFile)
-        throw "ApiFileNotFound"
+        throw "ApiConfigFileNotFound: ${apiFile}"
     xml = fs.readFileSync(apiFile, "utf8")
-    return routesFromXml(xml)
+    try
+        return routesFromXml(xml)
+    catch error
+        throw "ApiConfigInvalid: ${apiFile}: ${error}"
 
 routesFromXml(xml)
     root = xml2obj(xml)
+    if root.tag() != "api"
+        throw "ApiConfigRootMustBeApi"
+    validateAttributes(root, [])
     routes = []
     collectRoutes(root, "", null, routes)
     return routes
 
+validateAttributes(tag, allowed)
+    tagName = tag.tag()
+    for tag.attributes() as name: value
+        if not allowed.includes(name)
+            throw "ApiConfigUnknownAttribute: <${tagName}> ${name}"
+    return null
+
 collectRoutes(tag, parentPath, parentMod, routes)
     for tag.children() as child
         if child.tag() == "group"
+            validateAttributes(child, ["path", "mod"])
             path = child.path
             mod = child.mod
             if path == null
@@ -73,14 +88,18 @@ collectRoutes(tag, parentPath, parentMod, routes)
             if mod == null
                 mod = parentMod
             collectRoutes(child, parentPath + path, mod, routes)
-        if child.tag() == "endpoint"
-            endpoint = endpointFromTag(child)
-            endpoint.path = parentPath + endpoint.path
-            if endpoint.mod == null and endpoint.module == null
-                endpoint.mod = parentMod
-            if endpoint.mod == null and endpoint.module == null and endpoint.handler == null
-                throw "ApiEndpointRequiresPathModAndFunc"
-            addRoute(routes, endpoint)
+          else
+              if child.tag() == "endpoint"
+                  endpoint = endpointFromTag(child)
+                  endpoint.path = parentPath + endpoint.path
+                  if endpoint.mod == null and endpoint.module == null
+                      endpoint.mod = parentMod
+                  if endpoint.mod == null and endpoint.module == null and endpoint.handler == null
+                      throw "ApiEndpointRequiresPathModAndFunc"
+                  addRoute(routes, endpoint)
+                else
+                    childTag = child.tag()
+                    throw "ApiConfigUnknownTag: <${childTag}>"
 
 findRoute(routes, requestPath)
     for routes as route
@@ -116,3 +135,15 @@ test "groups inherit path and module"
     routes = routesFromXml("<api><group path=\"/math\" mod=\"math\"><endpoint path=\"/add\" func=\"add\" /></group></api>")
     assert routes[0].path == "/math/add"
     assert routes[0].mod == "math"
+
+test "api XML rejects an unknown tag and attribute"
+    try
+        routesFromXml("<api><unknown /></api>")
+        assert false
+    catch error
+        assert error == "ApiConfigUnknownTag: <unknown>"
+    try
+        routesFromXml("<api><endpoint path=\"/health\" mod=\"health\" func=\"check\" typo=\"true\" /></api>")
+        assert false
+    catch error
+        assert error == "ApiConfigUnknownAttribute: <endpoint> typo"

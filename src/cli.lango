@@ -120,8 +120,11 @@ main(args)
         apiFile = apiFileFor(configuration, options, process.env)
         host = new Host(configuration)
         host.routesFromXml(apiFile)
-        host.start()
-        log.info("lango-api listening on ${configuration.host}:${configuration.port}")
+        return host.start().then((server)
+            capture configuration, log
+            log.info("lango-api listening on ${configuration.host}:${configuration.port}")
+            return server
+        )
     catch error
         log.err("lango-api: ${error}")
         process.exitCode = 1

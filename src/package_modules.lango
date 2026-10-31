@@ -6,6 +6,7 @@ import js "node:process" as process
 
 export prepareLinkedPackages(appRoot, routes)
 export resolveModule(appRoot, moduleName)
+export validateRouteModules(appRoot, routes)
 
 packageDirectory(appRoot, moduleName)
     return path.join(appRoot, "node_modules", moduleName)
@@ -55,6 +56,26 @@ prepareLinkedPackages(appRoot, routes)
 resolveModule(appRoot, moduleName)
     resolver = nodeModule/createRequire(path.join(appRoot, "package.json"))
     return resolver.resolve(moduleName)
+
+validateRouteModules(appRoot, routes)
+    return validateRouteModuleAt(appRoot, routes, 0)
+
+moduleExportsFunction(module, name)
+    return module[name] != null
+
+validateRouteModuleAt(appRoot, routes, index)
+    if index >= routes.length
+        return import_module("node:fs")
+    route = routes[index]
+    if not is_string(route.mod)
+        return validateRouteModuleAt(appRoot, routes, index + 1)
+    moduleFile = resolveModule(appRoot, route.mod)
+    return import_module(moduleFile).then((module)
+        capture appRoot, routes, index, route
+        if not moduleExportsFunction(module, route.func)
+            throw "ApiHandlerNotExported: ${route.path} -> ${route.mod}.${route.func}"
+        return validateRouteModuleAt(appRoot, routes, index + 1)
+    )
 
 test "Lango package manifests require a source, output and build script"
     settings = langoBuild({
