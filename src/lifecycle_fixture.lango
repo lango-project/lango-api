@@ -1,4 +1,5 @@
 export registered(input)
+export started(input)
 
 registered(input)
     context token
@@ -6,4 +7,10 @@ registered(input)
     assert input.clientId == token.clientId
     assert input.url == request.path
     token.importedRegistration = true
+    return null
+
+started(input)
+    context token
+    token.registrationBeforeStart = token.importedRegistration == true
+    token.started = true
     return null

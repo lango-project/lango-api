@@ -108,9 +108,26 @@ route handlers, using an `event` instead of a `path`. A callback module's export
 are checked before listening, and linked npm packages are built on startup.
 There is one callback per event; duplicates and unknown events are rejected.
 The equivalent configuration map is `lifecycle: { register: registerClient,
-start: { module: "@shop/session", function: "startSession" } }`. Lifecycle
-callback registration currently uses the library API; XML/CLI bindings, request
-audit, and ping events are pending.
+start: { module: "@shop/session", function: "startSession" } }`.
+
+XML applications declare these callbacks directly under `<api>`:
+
+```xml
+<api>
+  <event name="register" mod="@shop/session" func="registerClient" />
+  <event name="start" mod="@shop/session" func="startSession" />
+  <endpoint path="/health" mod="@shop/health" func="check" anonymous="true" />
+</api>
+```
+
+`host.routesFromXml(apiFile)` loads routes and lifecycle events together. The
+CLI loads the same definitions from its selected `api.xml`, including `--api`
+and `LANGO_API` overrides. Events belong at the root and require `name`, `mod`,
+and `func`; unknown attributes, nested content, unknown names, and duplicate
+events are rejected. XML and code registrations may define different events;
+defining the same event in both is an error. Replacing the route source also
+replaces its XML events, while code registrations remain. Request audit and
+ping events are pending.
 
 ## Configuration
 

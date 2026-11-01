@@ -1,7 +1,7 @@
 import "./api_registry"
     addRoute(routes, endpoint)
     createEndpoint(options)
-    loadRoutes(apiFile)
+    loadApi(apiFile)
     anonymousValue(value)
 import "./package_modules"
     prepareLinkedPackages(appRoot, routes)
@@ -36,18 +36,27 @@ Host(configuration)
     @configuration = configuration
     configuration.lifecycle = createLifecycle(configuration.lifecycle)
     @routes = null
+    @xmlLifecycle = createLifecycle(null)
 
 Host:routes(routes)
     @routes = routes.values()
+    @xmlLifecycle = createLifecycle(null)
     return this
 
 Host:routesFromXml(apiFile)
-    @routes = loadRoutes(apiFile)
+    api = loadApi(apiFile)
+    configuration = @configuration
+    mergeLifecycle(configuration.lifecycle, api.lifecycle)
+    @routes = api.routes
+    @xmlLifecycle = api.lifecycle
     return this
 
 Host:on(options)
     configuration = @configuration
-    addLifecycle(configuration.lifecycle, options)
+    handlers = createLifecycle(configuration.lifecycle)
+    addLifecycle(handlers, options)
+    mergeLifecycle(handlers, @xmlLifecycle)
+    configuration.lifecycle = handlers
     return this
 
 Host:start()
@@ -55,6 +64,7 @@ Host:start()
         throw "ApiRoutesNotConfigured"
     configuration = @configuration
     configureTokenService(configuration)
+    configuration = withXmlLifecycle(configuration, @xmlLifecycle)
     routes = @routes
     targets = routes.slice()
     for lifecycleTargets(configuration.lifecycle) as target
@@ -64,6 +74,20 @@ Host:start()
         capture configuration, routes
         return startServer(configuration, routes)
     )
+
+mergeLifecycle(base, extra)
+    handlers = createLifecycle(base)
+    for extra as event: handler
+        if handler != null
+            addLifecycle(handlers, { event: event, module: handler.module, function: handler.function })
+    return handlers
+
+withXmlLifecycle(configuration, lifecycle)
+    result = {}
+    for configuration as name: value
+        result[name] = value
+    result.lifecycle = mergeLifecycle(configuration.lifecycle, lifecycle)
+    return result
 
 Routes()
     @items = []
@@ -183,3 +207,16 @@ test "startup rejects a missing lifecycle module export"
         assert false
     catch error
         assert error == "ApiHandlerNotExported: lifecycle:start -> missing"
+
+test "XML and code lifecycle registrations merge without silent overrides"
+    base = createLifecycle({ register: allowAuthForTest })
+    extra = createLifecycle({ start: denyAuthForTest })
+    combined = mergeLifecycle(base, extra)
+    assert combined.register.function == allowAuthForTest
+    assert combined.start.function == denyAuthForTest
+    assert base.start == null
+    try
+        mergeLifecycle(base, base)
+        assert false
+    catch error
+        assert error == "ApiDuplicateLifecycleEvent: register"

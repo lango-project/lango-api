@@ -2,8 +2,13 @@ import js "node:fs" as fs
 import "./authorization"
     createAuth(spec)
     resolveAuth(spec, definitions)
+import "./lifecycle"
+    createLifecycle(spec)
+    addLifecycle(handlers, options)
 
 export loadRoutes(apiFile)
+export loadApi(apiFile)
+export apiFromXml(xml)
 export findRoute(routes, requestPath)
 export endpointFromTag(tag)
 export createEndpoint(options)
@@ -77,22 +82,36 @@ addRoute(routes, endpoint)
     return endpoint
 
 loadRoutes(apiFile)
+    api = loadApi(apiFile)
+    return api.routes
+
+loadApi(apiFile)
     if not fs.existsSync(apiFile)
         throw "ApiConfigFileNotFound: ${apiFile}"
     xml = fs.readFileSync(apiFile, "utf8")
     try
-        return routesFromXml(xml)
+        return apiFromXml(xml)
     catch error
         throw "ApiConfigInvalid: ${apiFile}: ${error}"
 
 routesFromXml(xml)
+    api = apiFromXml(xml)
+    return api.routes
+
+apiFromXml(xml)
     root = xml2obj(xml)
     if root.tag() != "api"
         throw "ApiConfigRootMustBeApi"
     validateAttributes(root, [])
     routes = []
     definitions = {}
+    lifecycle = createLifecycle(null)
     for root.children() as child
+        if child.tag() == "event"
+            validateAttributes(child, ["name", "mod", "func"])
+            if child.children().length != 0 or child.innerText().trim() != ""
+                throw "ApiLifecycleEventMustBeEmpty"
+            addLifecycle(lifecycle, { event: child.name, module: child.mod, function: child.func })
         if child.tag() == "auth"
             validateAttributes(child, ["name", "mod", "func"])
             name = child.name
@@ -104,7 +123,7 @@ routesFromXml(xml)
     collectRoutes(root, "", null, routes, false, null)
     for routes as route
         route.auth = resolveAuth(route.auth, definitions)
-    return routes
+    return { routes: routes, lifecycle: lifecycle }
 
 validateAttributes(tag, allowed)
     tagName = tag.tag()
@@ -116,6 +135,8 @@ validateAttributes(tag, allowed)
 collectRoutes(tag, parentPath, parentMod, routes, parentAnonymous, parentAuth)
     for tag.children() as child
         if tag.tag() == "api" and child.tag() == "auth"
+            continue
+        if tag.tag() == "api" and child.tag() == "event"
             continue
         if child.tag() == "group"
             validateAttributes(child, ["path", "mod", "anonymous", "auth"])
@@ -225,3 +246,29 @@ test "XML auth definitions resolve across group inheritance and declaration orde
         assert false
     catch error
         assert error == "ApiUnknownAuth: unknown"
+
+test "XML lifecycle events are separate from routes and preserve handler references"
+    api = apiFromXml("<api><event name=\"register\" mod=\"@shop/session\" func=\"registerClient\" /><endpoint path=\"/health\" mod=\"app\" func=\"health\" /><event name=\"start\" mod=\"@shop/session\" func=\"startSession\" /></api>")
+    assert api.routes.length == 1
+    assert api.routes[0].path == "/health"
+    assert api.lifecycle.register.module == "@shop/session"
+    assert api.lifecycle.register.function == "registerClient"
+    assert api.lifecycle.start.function == "startSession"
+    assert routesFromXml("<api><event name=\"start\" mod=\"app\" func=\"start\" /></api>").length == 0
+
+test "XML lifecycle events reject invalid definitions and group nesting"
+    cases = []
+    cases.add({ xml: "<api><event name=\"ping\" mod=\"app\" func=\"ping\" /></api>", error: "ApiUnknownLifecycleEvent" })
+    cases.add({ xml: "<api><event name=\"start\" func=\"start\" /></api>", error: "ApiLifecycleRequiresModuleAndFunction" })
+    cases.add({ xml: "<api><event name=\"start\" mod=\"app\" /></api>", error: "ApiLifecycleRequiresModuleAndFunction" })
+    cases.add({ xml: "<api><event name=\"start\" mod=\"app\" func=\"start\" typo=\"true\" /></api>", error: "ApiConfigUnknownAttribute: <event> typo" })
+    cases.add({ xml: "<api><event name=\"start\" mod=\"app\" func=\"start\">text</event></api>", error: "ApiLifecycleEventMustBeEmpty" })
+    cases.add({ xml: "<api><event name=\"start\" mod=\"app\" func=\"start\"><child /></event></api>", error: "ApiLifecycleEventMustBeEmpty" })
+    cases.add({ xml: "<api><event name=\"start\" mod=\"app\" func=\"start\" /><event name=\"start\" mod=\"app\" func=\"other\" /></api>", error: "ApiDuplicateLifecycleEvent: start" })
+    cases.add({ xml: "<api><group path=\"/app\"><event name=\"start\" mod=\"app\" func=\"start\" /></group></api>", error: "ApiConfigUnknownTag: <event>" })
+    for cases as expected
+        try
+            apiFromXml(expected.xml)
+            assert false
+        catch error
+            assert error == expected.error

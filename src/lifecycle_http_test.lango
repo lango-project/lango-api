@@ -1,5 +1,7 @@
 import js "node:crypto" as crypto
 import js "node:path" as path
+import js "node:fs" as fs
+import js "node:os" as os
 import "./library"
     class Host
     class Routes
@@ -32,11 +34,16 @@ Harness:begin()
     routes.endpoint({ path: "/open", function: openHandler, anonymous: true })
     host = new Host({ host: "127.0.0.1", port: 0, appRoot: ".", tokenService: @service })
     if @external
-        host.on({ event: "register", module: path.resolve(".test-output/lifecycle_fixture.mjs"), function: "registered" })
+        @directory = fs.mkdtempSync(path.join(os.tmpdir(), "lango-lifecycle-xml-"))
+        file = path.join(@directory, "api.xml")
+        module = path.resolve(".test-output/lifecycle_fixture.mjs")
+        fs.writeFileSync(file, "<api><event name=\"register\" mod=\"${module}\" func=\"registered\" /><event name=\"start\" mod=\"${module}\" func=\"started\" /></api>")
+        host.routesFromXml(file)
+        host.routesFromXml(file)
       else
           host.on({ event: "register", function: registered })
-    host.on({ event: "start", module: @hooks, function: "started" })
-    host.routes(routes)
+          host.on({ event: "start", module: @hooks, function: "started" })
+          host.routes(routes)
     harness = this
     return host.start().then((server)
         capture harness
@@ -78,6 +85,9 @@ Harness:stop()
     if this.server != null
         this.server.close()
         this.server.closeAllConnections()
+    if @directory != null
+        fs.unlinkSync(path.join(@directory, "api.xml"))
+        fs.rmdirSync(@directory)
 
 registered(input)
     context request
@@ -179,9 +189,29 @@ importedRequest(harness)
 
 importedClaims(harness, token)
     return harness.service.verify(token).then((claims)
+        capture harness, token
         assert claims.importedRegistration
         assert claims.started
-        println("PASS lifecycle callback resolves an imported module and preserves context")
+        assert claims.registrationBeforeStart
+        return returningXmlRequest(harness, token, claims)
+    )
+
+returningXmlRequest(harness, token, previous)
+    return harness.request("/_lango/start", token).then((response)
+        capture harness, previous
+        assert response.status == 200
+        renewed = response.headers.get("X-Lango-Token")
+        return returningXmlClaims(harness, renewed, previous)
+    )
+
+returningXmlClaims(harness, token, previous)
+    return harness.service.verify(token).then((claims)
+        capture previous
+        assert claims.clientId == previous.clientId
+        assert claims.sessionId != previous.sessionId
+        assert claims.started
+        assert !claims.registrationBeforeStart
+        println("PASS XML lifecycle events load modules, preserve context, replace registrations and recover identities")
     )
 
 checkNew(harness)

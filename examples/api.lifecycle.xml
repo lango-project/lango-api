@@ -1,0 +1,5 @@
+<api>
+  <event name="register" mod="@shop/session" func="registerClient" />
+  <event name="start" mod="@shop/session" func="startSession" />
+  <endpoint path="/health" mod="@shop/health" func="check" anonymous="true" />
+</api>
