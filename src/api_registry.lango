@@ -22,7 +22,7 @@ createEndpoint(options)
     path = options.path
     mod = options.module
     func = options.function
-    if (not is_string(path)) or path == "" or func == null
+    if !is_string(path) or path == "" or func == null
         throw "ApiEndpointRequiresPathAndFunc"
     if path[0] != "/"
         throw "ApiEndpointPathMustStartWithSlash"
