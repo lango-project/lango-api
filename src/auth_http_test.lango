@@ -1,0 +1,170 @@
+import js "node:crypto" as crypto
+import "./server"
+    start(configuration, routes)
+import "./tokens"
+    class TokenService
+
+export main(args)
+
+class Harness
+    properties
+        service
+    methods
+        begin()
+        listening(completion)
+        request(path, token)
+        stop()
+
+Harness:begin()
+    @service = new TokenService({ issuer: "http-test", audience: "http-test", activeKeyId: "test", keys: { test: crypto/randomBytes(32) } })
+    server = start({ host: "127.0.0.1", port: 0, appRoot: ".", tokenService: @service }, [{ path: "/private", handler: privateHandler }, { path: "/login", handler: loginHandler, anonymous: true }, { path: "/boom", handler: brokenHandler }, { path: "/failed-login", handler: failedLogin, anonymous: true }])
+    @server = server
+    harness = this
+    ready = new Promise((resolve, reject)
+        capture server, harness
+        register(server, harness, resolve, reject)
+    )
+    return ready
+
+register(server, harness, resolve, reject)
+    completion = { resolve: resolve, reject: reject }
+    server.once("listening", ()
+        capture harness, completion
+        harness.listening(completion)
+    )
+    server.once("error", (error)
+        capture completion
+        completion.reject(error)
+    )
+
+Harness:listening(completion)
+    address = @server.address()
+    @url = "http://127.0.0.1:${address.port}"
+    completion.resolve(this)
+
+Harness:request(path, token)
+    headers = { "Content-Type": "application/json" }
+    if token != null
+        headers.Authorization = "Bearer ${token}"
+    url = @url
+    return fetch("${url}${path}", { method: "POST", headers: headers, body: "{}" })
+
+Harness:stop()
+    @server.close()
+    @server.closeAllConnections()
+
+loginHandler(input)
+    context token
+    token.auth = true
+    return { ok: true }
+
+privateHandler(input)
+    context token
+    return { auth: token.auth, clientId: token.clientId }
+
+brokenHandler(input)
+    throw "ExpectedHandlerFailure"
+
+failedLogin(input)
+    context token
+    token.auth = true
+    throw "ExpectedLoginFailure"
+
+main(args)
+    harness = new Harness()
+    return harness.begin().then((ready)
+        capture harness
+        return checkMissing(harness)
+    ).finally(()
+        capture harness
+        harness.stop()
+    )
+
+checkMissing(harness)
+    return harness.request("/private", null).then((response)
+        capture harness
+        assert response.status == 401
+        return checkStart(harness)
+    )
+
+checkStart(harness)
+    return harness.request("/_lango/start", null).then((response)
+        capture harness
+        assert response.status == 200
+        token = response.headers.get("X-Lango-Token")
+        return checkAnonymous(harness, token)
+    )
+
+checkAnonymous(harness, token)
+    return harness.request("/private", token).then((response)
+        capture harness, token
+        assert response.status == 401
+        return checkFailedLogin(harness, token)
+    )
+
+checkFailedLogin(harness, token)
+    return harness.request("/failed-login", token).then((response)
+        capture harness, token
+        assert response.status == 500
+        renewed = response.headers.get("X-Lango-Token")
+        return failedLoginClaims(harness, token, renewed)
+    )
+
+failedLoginClaims(harness, token, renewed)
+    return harness.service.verify(renewed).then((claims)
+        capture harness, token
+        assert !claims.auth
+        return checkLogin(harness, token)
+    )
+
+checkLogin(harness, token)
+    return harness.request("/login", token).then((response)
+        capture harness
+        assert response.status == 200
+        authenticated = response.headers.get("X-Lango-Token")
+        return checkAuthenticated(harness, authenticated)
+    )
+
+checkAuthenticated(harness, token)
+    return harness.request("/private", token).then((response)
+        capture harness, token
+        assert response.status == 200
+        return checkFailure(harness, token)
+    )
+
+checkFailure(harness, token)
+    return harness.request("/boom", token).then((response)
+        capture harness, token
+        assert response.status == 500
+        return checkTampering(harness, token)
+    )
+
+checkTampering(harness, token)
+    return harness.request("/login", token + "x").then((response)
+        capture harness, token
+        assert response.status == 401
+        return checkRestart(harness, token)
+    )
+
+checkRestart(harness, token)
+    return harness.service.verify(token).then((previous)
+        capture harness, token
+        return restartWithIdentity(harness, token, previous)
+    )
+
+restartWithIdentity(harness, token, previous)
+    return harness.request("/_lango/start", token).then((response)
+        capture harness, previous
+        assert response.status == 200
+        restarted = response.headers.get("X-Lango-Token")
+        return checkRestartedClaims(harness, previous, restarted)
+    )
+
+checkRestartedClaims(harness, previous, token)
+    return harness.service.verify(token).then((claims)
+        capture previous
+        assert claims.clientId == previous.clientId
+        assert claims.sessionId != previous.sessionId
+        assert !claims.auth
+        println("PASS HTTP bootstrap, bearer auth, protected routes, renewal, handler errors and restart identity")
+    )

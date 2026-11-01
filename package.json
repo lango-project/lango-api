@@ -27,8 +27,9 @@
   ],
   "scripts": {
     "build": "lango build src/cli.lango --out dist/cli.mjs --executable && lango build src/tokens.lango --out dist/tokens.mjs",
-    "test": "lango test src/cli.lango && npm run test:tokens",
-    "test:tokens": "lango build src/tokens_test.lango --out .test-output/tokens_test.mjs --executable && node .test-output/tokens_test.mjs"
+    "test": "lango test src/cli.lango && npm run test:tokens && npm run test:http",
+    "test:tokens": "lango build src/tokens_test.lango --out .test-output/tokens_test.mjs --executable && node .test-output/tokens_test.mjs",
+    "test:http": "lango build src/auth_http_test.lango --out .test-output/auth_http_test.mjs --executable && node .test-output/auth_http_test.mjs"
   },
   "devDependencies": {
     "@lango-project/lango-js": "^0.1.2"

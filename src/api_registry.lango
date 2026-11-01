@@ -7,13 +7,24 @@ export createEndpoint(options)
 export addRoute(routes, endpoint)
 export routeMissing(route)
 export routesFromXml(xml)
+export anonymousValue(value)
+
+anonymousValue(value)
+    if value == null
+        return null
+    if value == true or value == "true"
+        return true
+    if value == false or value == "false"
+        return false
+    throw "ApiAnonymousMustBeBoolean"
 
 endpointFromTag(tag)
-    validateAttributes(tag, ["path", "mod", "func"])
+    validateAttributes(tag, ["path", "mod", "func", "anonymous"])
     return createEndpoint({
         path: tag.path,
         module: tag.mod,
-        function: tag.func
+        function: tag.func,
+        anonymous: tag.anonymous
     })
 
 createEndpoint(options)
@@ -45,10 +56,13 @@ createEndpoint(options)
         mod: moduleName,
         func: functionName,
         module: moduleValue,
-        handler: handler
+        handler: handler,
+        anonymous: anonymousValue(options.anonymous)
     }
 
 addRoute(routes, endpoint)
+    if endpoint.anonymous == null
+        endpoint.anonymous = false
     if endpoint.func != null and endpoint.mod == null and endpoint.module == null
         throw "ApiEndpointStringFunctionRequiresModule"
     for routes as existing
@@ -72,7 +86,7 @@ routesFromXml(xml)
         throw "ApiConfigRootMustBeApi"
     validateAttributes(root, [])
     routes = []
-    collectRoutes(root, "", null, routes)
+    collectRoutes(root, "", null, routes, false)
     return routes
 
 validateAttributes(tag, allowed)
@@ -82,21 +96,26 @@ validateAttributes(tag, allowed)
             throw "ApiConfigUnknownAttribute: <${tagName}> ${name}"
     return null
 
-collectRoutes(tag, parentPath, parentMod, routes)
+collectRoutes(tag, parentPath, parentMod, routes, parentAnonymous)
     for tag.children() as child
         if child.tag() == "group"
-            validateAttributes(child, ["path", "mod"])
+            validateAttributes(child, ["path", "mod", "anonymous"])
             path = child.path
             mod = child.mod
             if path == null
                 path = ""
             if mod == null
                 mod = parentMod
-            collectRoutes(child, parentPath + path, mod, routes)
+            anonymous = anonymousValue(child.anonymous)
+            if anonymous == null
+                anonymous = parentAnonymous
+            collectRoutes(child, parentPath + path, mod, routes, anonymous)
           else
               if child.tag() == "endpoint"
                   endpoint = endpointFromTag(child)
                   endpoint.path = parentPath + endpoint.path
+                  if endpoint.anonymous == null
+                      endpoint.anonymous = parentAnonymous
                   if endpoint.mod == null and endpoint.module == null
                       endpoint.mod = parentMod
                   if endpoint.mod == null and endpoint.module == null and endpoint.handler == null
@@ -155,6 +174,11 @@ test "groups inherit path and module"
     routes = routesFromXml("<api><group path=\"/math\" mod=\"math\"><endpoint path=\"/add\" func=\"add\" /></group></api>")
     assert routes[0].path == "/math/add"
     assert routes[0].mod == "math"
+
+test "anonymous flags inherit and can be overridden"
+    routes = routesFromXml("<api><group path=\"/public\" mod=\"app\" anonymous=\"true\"><endpoint path=\"/open\" func=\"open\" /><endpoint path=\"/private\" func=\"private\" anonymous=\"false\" /></group></api>")
+    assert routes[0].anonymous
+    assert !routes[1].anonymous
 
 test "api XML rejects an unknown tag and attribute"
     try

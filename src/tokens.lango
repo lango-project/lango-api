@@ -9,6 +9,8 @@ export class TokenService
         sign(claims)
         verify(token)
         verifySigned(token)
+        restart(token)
+        recoverClient(token)
 
 TokenService(options)
     if !is_string(options.issuer) or options.issuer == ""
@@ -49,6 +51,10 @@ TokenService:sign(claims)
         payload.auth = false
     if not is_bool(payload.auth)
         throw "ApiTokenAuthMustBeBoolean"
+    if payload.clientId == null
+        payload.clientId = crypto/randomUUID()
+    if payload.sessionId == null
+        payload.sessionId = crypto/randomUUID()
     signer = new jose/SignJWT(payload)
     signer.setProtectedHeader({ alg: "HS256", typ: "lango+jwt", kid: @activeKeyId })
     signer.setIssuer(@issuer)
@@ -91,3 +97,43 @@ verifiedPayload(verified)
     if not is_bool(verified.payload.auth)
         throw "ApiInvalidToken"
     return verified.payload
+
+TokenService:restart(token)
+    global promises
+    service = this
+    return promises.resolve().then(()
+        capture service, token
+        return service.recoverClient(token)
+    ).catch((error)
+        return newClientId()
+    ).then((clientId)
+        return restartedClaims(clientId)
+    )
+
+TokenService:recoverClient(token)
+    if !is_string(token) or token.length > 16384
+        throw "ApiInvalidToken"
+    header = jose/decodeProtectedHeader(token)
+    if header.typ != "lango+jwt" or !is_string(header.kid) or !util/types/isUint8Array(@keys[header.kid])
+        throw "ApiInvalidToken"
+    issuer = @issuer
+    audience = @audience
+    return jose/compactVerify(token, @keys[header.kid], { algorithms: ["HS256"] }).then((verified)
+        capture issuer, audience
+        return recoveredClientId(verified, issuer, audience)
+    )
+
+newClientId()
+    return crypto/randomUUID()
+
+restartedClaims(clientId)
+    return { clientId: clientId, sessionId: crypto/randomUUID(), auth: false }
+
+recoveredClientId(verified, issuer, audience)
+    decoder = new TextDecoder()
+    claims = from_json(decoder.decode(verified.payload))
+    if claims.iss != issuer or claims.aud != audience
+        throw "ApiInvalidToken"
+    if !is_string(claims.clientId) or claims.clientId == "" or claims.clientId.length > 128
+        throw "ApiInvalidToken"
+    return claims.clientId

@@ -122,8 +122,8 @@ createOrder(input)
 ```
 
 `request` provides `id`, `method`, `path`, `headers`, and `remoteAddress`.
-`token` initially contains `{ auth: false }`; authentication will replace or
-enrich it in a later milestone. `log` is request-scoped and includes the
+`token` contains verified claims when a TokenService is configured, and
+`{ auth: false }` in the legacy host mode. `log` is request-scoped and includes the
 request id. A normal return value is serialized as a JSON response. A handler
 can call `response.send(value)` to write JSON immediately; a later return value
 is ignored. `response.status(code)` and `response.header(name, value)` apply to
@@ -146,9 +146,33 @@ System claims are written by the service. Retaining an old key id allows
 verification during key rotation. Only trusted services that may also sign
 tokens should receive these shared secrets.
 
-This is a standalone foundation. HTTP route authorization, token refresh,
-browser persistence, and revocation are not yet integrated. The host still
-provides its existing anonymous token context.
+Configure a library Host with `tokenService: service` to enable bearer
+verification. Routes are then protected by default and require `token.auth` to
+be true. Mark a route or group `anonymous: true` (XML `anonymous="true"`) for
+public access; child routes can override group inheritance. Missing, invalid,
+expired, or unauthenticated tokens return 401 with a Bearer challenge. Supplying
+an invalid token to a public endpoint is also rejected. Without a TokenService,
+the host retains its previous unauthenticated mode.
+
+Verified claims are available through `context token`; changes made by a login
+or logout handler are signed into the `X-Lango-Token` response header. Renewals
+also accompany handler error responses when claims were already verified.
+On handler failure, token changes are discarded and the originally verified
+claims are renewed, so a partially failed login cannot grant authentication.
+`clientId` and `sessionId` are fixed for the request and cannot be changed by
+mutating the context. Token-bearing responses use `Cache-Control: no-store`.
+
+With tokens enabled, `POST /_lango/start` is reserved for bootstrap. It accepts
+the previous bearer token, recovers only clientId after verifying its signature,
+issuer, audience, type and known key id, and generates a new sessionId with
+`auth: false`. Expiry is deliberately ignored only in this identity-recovery
+path; old authentication and form claims are never restored. Invalid previous
+tokens begin a fresh client identity. Normal endpoint verification still checks
+expiry. The client persists the returned token and resets its local counters.
+
+Custom auth callbacks, CLI/XML key configuration, revocation and replay policy
+remain pending. JWT activation currently uses the library configuration. Setting
+`token.auth = false` issues an anonymous token but does not revoke older tokens.
 
 ## Application packages
 

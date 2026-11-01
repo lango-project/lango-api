@@ -2,6 +2,7 @@ import "./api_registry"
     addRoute(routes, endpoint)
     createEndpoint(options)
     loadRoutes(apiFile)
+    anonymousValue(value)
 import "./package_modules"
     prepareLinkedPackages(appRoot, routes)
     validateRouteModules(appRoot, routes)
@@ -59,7 +60,7 @@ Routes:group(options)
         throw "ApiGroupRequiresPath"
     if path[0] != "/"
         throw "ApiGroupPathMustStartWithSlash"
-    return new RouteGroup(@items, path, mod)
+    return new RouteGroup(@items, path, mod, anonymousValue(options.anonymous))
 
 Routes:values()
     return @items
@@ -69,14 +70,17 @@ class RouteGroup
         endpoint(options)
         group(options)
 
-RouteGroup(items, path, mod)
+RouteGroup(items, path, mod, anonymous)
     @items = items
     @path = path
     @mod = mod
+    @anonymous = anonymous
 
 RouteGroup:endpoint(options)
     endpoint = createEndpoint(options)
     endpoint.path = @path + endpoint.path
+    if endpoint.anonymous == null
+        endpoint.anonymous = @anonymous
     if endpoint.mod == null and endpoint.module == null
         if is_string(@mod)
             endpoint.mod = @mod
@@ -96,7 +100,10 @@ RouteGroup:group(options)
         throw "ApiGroupPathMustStartWithSlash"
     if mod == null
         mod = @mod
-    return new RouteGroup(@items, @path + path, mod)
+    anonymous = anonymousValue(options.anonymous)
+    if anonymous == null
+        anonymous = @anonymous
+    return new RouteGroup(@items, @path + path, mod, anonymous)
 
 test "route builder groups paths and modules"
     routes = new Routes()

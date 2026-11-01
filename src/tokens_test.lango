@@ -80,7 +80,35 @@ checkPolicy()
     service = new TokenService(configuration(key))
     return promises.all([wrongHeader(service, key, "HS384", "lango+jwt"), wrongHeader(service, key, "HS256", "other+jwt")]).then((results)
         println("PASS algorithm and token type are pinned")
+        return checkExpiredIdentity()
     )
+
+checkExpiredIdentity()
+    key = crypto/randomBytes(32)
+    service = new TokenService(configuration(key))
+    signer = new jose/SignJWT({ auth: true, clientId: "stable-client", privateForm: "must-not-survive" })
+    signer.setProtectedHeader({ alg: "HS256", typ: "lango+jwt", kid: "current" })
+    signer.setIssuer("lango-test")
+    signer.setAudience("lango-api-test")
+    signer.setIssuedAt(1)
+    signer.setExpirationTime(2)
+    signer.setJti("expired-identity")
+    return signer.sign(key).then((token)
+        capture service
+        return restartExpired(service, token)
+    )
+
+restartExpired(service, token)
+    return service.restart(token).then((claims)
+        assert claims.clientId == "stable-client"
+        assert !claims.auth
+        assertFormCleared(claims)
+        println("PASS expired signed tokens recover only client identity, never auth or form claims")
+    )
+
+assertFormCleared(claims)
+    assert claims.privateForm == null
+    return null
 
 wrongHeader(service, key, algorithm, type)
     signer = new jose/SignJWT({ auth: true })

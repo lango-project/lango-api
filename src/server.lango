@@ -16,6 +16,10 @@ class ApiResponse
         header(name, value)
         send(value)
         completed()
+        bindToken(claims)
+        discardTokenChanges()
+        write(body, token)
+        signingFailed()
 
 class RequestLog
     methods
@@ -24,13 +28,28 @@ class RequestLog
         warn(message)
         err(message)
 
-ApiResponse(httpResponse)
+ApiResponse(httpResponse, tokenService = null, requestId = null)
     @httpResponse = httpResponse
     @statusCode = 200
     @completed = false
+    @tokenService = tokenService
+    @claims = null
+    @requestId = requestId
+
+ApiResponse:bindToken(claims)
+    @claims = claims
+    @clientId = claims.clientId
+    @sessionId = claims.sessionId
+    @originalClaims = from_json(to_json(claims))
+    return null
+
+ApiResponse:discardTokenChanges()
+    if @claims != null
+        @claims = @originalClaims
+    return null
 
 ApiResponse:status(code)
-    if not is_number(code) or code < 100 or code > 599 or code % 1 != 0
+    if !is_number(code) or code < 100 or code > 599 or code % 1 != 0
         throw "ApiResponseStatusMustBeAnIntegerBetween100And599"
     if @completed
         throw "ApiResponseAlreadySent"
@@ -38,7 +57,7 @@ ApiResponse:status(code)
     return this
 
 ApiResponse:header(name, value)
-    if not is_string(name) or name == ""
+    if !is_string(name) or name == ""
         throw "ApiResponseHeaderNameMustBeAString"
     if @completed
         throw "ApiResponseAlreadySent"
@@ -49,13 +68,42 @@ ApiResponse:header(name, value)
 ApiResponse:send(value)
     if @completed
         throw "ApiResponseAlreadySent"
+    body = to_json(value)
+    @completed = true
+    if @tokenService != null and @claims != null
+        @claims.clientId = @clientId
+        @claims.sessionId = @sessionId
+        reply = this
+        try
+            return @tokenService.sign(@claims).then((token)
+                capture reply, body
+                reply.write(body, token)
+            ).catch((error)
+                capture reply
+                reply.signingFailed()
+            )
+        catch error
+            return this.signingFailed()
+    return this.write(body, null)
+
+ApiResponse:write(body, token)
     httpResponse = @httpResponse
     if httpResponse.getHeader("Content-Type") == null
         httpResponse.setHeader("Content-Type", "application/json; charset=utf-8")
     httpResponse.statusCode = @statusCode
-    @completed = true
-    httpResponse.end(to_json(value))
+    if token != null
+        httpResponse.setHeader("X-Lango-Token", token)
+        httpResponse.setHeader("Cache-Control", "no-store")
+    httpResponse.end(body)
     return null
+
+ApiResponse:signingFailed()
+    context log
+    log.err("Token signing failed")
+    @statusCode = 500
+    @httpResponse.setHeader("Content-Type", "application/json; charset=utf-8")
+    body = to_json({ error: "InternalServerError", requestId: @requestId })
+    return this.write(body, null)
 
 ApiResponse:completed()
     return @completed
@@ -100,9 +148,13 @@ requestContext(httpRequest, requestId)
 anonymousToken()
     return { auth: false }
 
+bootstrapRoute()
+    return { bootstrap: true }
+
 sendFailure(response, log, request)
     log.err("${request.method} ${request.path}: handler failed")
     if not response.completed()
+        response.discardTokenChanges()
         response.status(500).send({ error: "InternalServerError", requestId: request.id })
     return null
 
@@ -124,12 +176,16 @@ sendResult(response, log, request, result)
 
 start(configuration, routes)
     context log
+    if configuration.tokenService != null
+        for routes as configured
+            if configured.path == "/_lango/start"
+                throw "ApiTokenBootstrapPathIsReserved"
     server = new http/Server((httpRequest, httpResponse)
         capture configuration, routes, log, crypto
         requestId = crypto/randomUUID()
         requestLog = new RequestLog(log, requestId)
         apiRequest = requestContext(httpRequest, requestId)
-        apiResponse = new ApiResponse(httpResponse)
+        apiResponse = new ApiResponse(httpResponse, configuration.tokenService, requestId)
         apiToken = anonymousToken()
         context log = requestLog
         context request = apiRequest
@@ -144,18 +200,22 @@ start(configuration, routes)
             apiResponse.status(400).send({ error: "QueryNotSupported", requestId: apiRequest.id })
             return
         route = findRoute(routes, apiRequest.path)
+        if apiRequest.path == "/_lango/start" and not routeMissing(configuration.tokenService)
+            route = bootstrapRoute()
         if routeMissing(route)
             requestLog.warn("${apiRequest.method} ${apiRequest.path}: route was not found")
             apiResponse.status(404).send({ error: "RouteNotFound", requestId: apiRequest.id })
             return
         body = ""
         appRoot = configuration.appRoot
+        tokenService = configuration.tokenService
+        authorization = httpRequest.headers.authorization
         httpRequest.on("data", (chunk)
             capture body
             body = body + chunk.toString()
         )
         httpRequest.on("end", ()
-            capture appRoot, route, apiResponse, apiRequest, requestLog, request, response, token, log, body
+            capture appRoot, route, apiResponse, apiRequest, requestLog, request, response, token, log, body, tokenService, authorization
             input = {}
             try
                 if body != ""
@@ -165,25 +225,7 @@ start(configuration, routes)
                 apiResponse.status(400).send({ error: "BadRequest", requestId: apiRequest.id })
                 return
             try
-                handler = route.handler
-                if not routeMissing(handler)
-                    result = route.handler(input)
-                    sendResult(apiResponse, requestLog, apiRequest, result)
-                    return
-                module = route.module
-                if not routeMissing(module)
-                    result = module[route.func](input)
-                    sendResult(apiResponse, requestLog, apiRequest, result)
-                    return
-                moduleFile = resolveModule(appRoot, route.mod)
-                import_module(moduleFile).then((module)
-                    capture input, apiResponse, apiRequest, requestLog, response, request, token, log, route
-                    result = module[route.func](input)
-                    sendResult(apiResponse, requestLog, apiRequest, result)
-                ).catch((error)
-                    capture apiResponse, apiRequest, requestLog, response, request, log
-                    sendFailure(apiResponse, requestLog, apiRequest)
-                )
+                authenticate(tokenService, authorization, route, input, appRoot)
             catch error
                 sendFailure(apiResponse, requestLog, apiRequest)
         )
@@ -194,6 +236,94 @@ start(configuration, routes)
     )
     server.listen(configuration.port, configuration.host)
     return server
+
+bearerToken(authorization)
+    if authorization == null
+        return null
+    if !is_string(authorization)
+        throw "ApiInvalidToken"
+    scheme = authorization.slice(0, 7)
+    if scheme.toLowerCase() != "bearer "
+        throw "ApiInvalidToken"
+    value = authorization.slice(7)
+    if value == ""
+        throw "ApiInvalidToken"
+    return value
+
+unauthorized()
+    context response
+    context request
+    response.header("WWW-Authenticate", "Bearer")
+    response.status(401).send({ error: "Unauthorized", requestId: request.id })
+    return null
+
+authenticate(service, authorization, route, input, appRoot)
+    context request
+    context response
+    context log
+    if service == null
+        return invokeRoute(route, input, appRoot)
+    raw = null
+    try
+        raw = bearerToken(authorization)
+    catch error
+        return unauthorized()
+    if route.bootstrap == true
+        return service.restart(raw).then((claims)
+            capture request, response, log
+            response.bindToken(claims)
+            response.send({ clientId: claims.clientId, sessionId: claims.sessionId })
+        )
+    if raw == null
+        if route.anonymous != true
+            return unauthorized()
+        return service.restart(raw).then((claims)
+            capture route, input, appRoot, request, response, log
+            return invokeWithToken(claims, route, input, appRoot)
+        )
+    return service.verify(raw).then((claims)
+        capture route, input, appRoot, request, response, log
+        return invokeWithToken(claims, route, input, appRoot)
+    ).catch((error)
+        capture response, request, log
+        return unauthorized()
+    )
+
+invokeWithToken(claims, route, input, appRoot)
+    context request
+    context response
+    context log
+    context token = claims
+    response.bindToken(claims)
+    if route.anonymous != true and claims.auth != true
+        return unauthorized()
+    return invokeRoute(route, input, appRoot)
+
+invokeRoute(route, input, appRoot)
+    context request
+    context response
+    context token
+    context log
+    try
+        if not routeMissing(route.handler)
+            handlerResult = route.handler(input)
+            return sendResult(response, log, request, handlerResult)
+        module = route.module
+        if not routeMissing(module)
+            moduleResult = module[route.func](input)
+            return sendResult(response, log, request, moduleResult)
+        moduleFile = resolveModule(appRoot, route.mod)
+        return import_module(moduleFile).then((module)
+            capture input, route, request, response, token, log
+            importedResult = module[route.func](input)
+            return sendResult(response, log, request, importedResult)
+        ).catch((error)
+            capture request, response, log
+            sendFailure(response, log, request)
+        )
+    catch error
+        sendFailure(response, log, request)
+    return null
 
 test "request context preserves HTTP metadata"
     httpRequest = { method: "POST", url: "/health", headers: { accept: "application/json" }, socket: { remoteAddress: "127.0.0.1" } }
