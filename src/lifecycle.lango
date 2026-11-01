@@ -1,0 +1,151 @@
+import "./package_modules"
+    resolveModule(appRoot, moduleName)
+
+global promises = globalThis.Promise
+
+export createLifecycle(spec)
+export addLifecycle(handlers, options)
+export lifecycleTargets(handlers)
+export initializeSession(session, handlers, appRoot)
+
+createLifecycle(spec)
+    handlers = { register: null, start: null }
+    if spec == null
+        return handlers
+    if not is_object(spec)
+        throw "ApiLifecycleMustBeMap"
+    for spec as event: handler
+        if handler != null
+            if is_kindof(handler, Function)
+                addLifecycle(handlers, { event: event, function: handler })
+              else
+                  if not is_object(handler)
+                      throw "ApiLifecycleRequiresFunctionOrMap"
+                  addLifecycle(handlers, { event: event, module: handler.module, function: handler.function })
+          else
+              requireEvent(event)
+    return handlers
+
+requireEvent(event)
+    if event != "register" and event != "start"
+        throw "ApiUnknownLifecycleEvent"
+    return null
+
+addLifecycle(handlers, options)
+    if not is_object(options)
+        throw "ApiLifecycleOptionsMustBeMap"
+    event = options.event
+    requireEvent(event)
+    if handlers[event] != null
+        throw "ApiDuplicateLifecycleEvent: ${event}"
+    handler = options.function
+    module = options.module
+    if is_kindof(handler, Function)
+        handlers[event] = { module: null, function: handler }
+        return handlers
+    if !is_string(handler) or handler == "" or module == null
+        throw "ApiLifecycleRequiresModuleAndFunction"
+    if is_string(module)
+        if module == ""
+            throw "ApiLifecycleRequiresModuleAndFunction"
+      else
+          if !is_object(module) and !is_kindof(module, Function)
+              throw "ApiLifecycleRequiresModuleAndFunction"
+    handlers[event] = { module: module, function: handler }
+    return handlers
+
+lifecycleTargets(handlers)
+    targets = []
+    for handlers as event: handler
+        if handler != null
+            moduleName = null
+            moduleValue = handler.module
+            if is_string(moduleValue)
+                moduleName = moduleValue
+                moduleValue = null
+            targets.add({ path: "lifecycle:${event}", mod: moduleName, module: moduleValue, func: handler.function })
+    return targets
+
+initializeSession(session, handlers, appRoot)
+    global promises
+    context request
+    context response
+    context log
+    claims = session.claims
+    context token = claims
+    metadata = sessionMetadata(claims)
+    return promises.resolve().then(()
+        capture session, handlers, appRoot, metadata, request, response, log, token
+        if session.registered
+            return callLifecycle(handlers.register, metadata, appRoot)
+        return lifecycleNoop(metadata)
+    ).then(()
+        capture handlers, appRoot, metadata, request, response, log, token
+        restoreIdentity(token, metadata)
+        return callLifecycle(handlers.start, metadata, appRoot)
+    ).then(()
+        capture claims, metadata, token
+        restoreIdentity(claims, metadata)
+        return claims
+    )
+
+restoreIdentity(claims, metadata)
+    claims.clientId = metadata.clientId
+    claims.sessionId = metadata.sessionId
+    return null
+
+sessionMetadata(claims)
+    context request
+    timestamp = new Date()
+    return {
+        ip: request.remoteAddress
+        timestamp: timestamp.toISOString()
+        userAgent: request.headers["user-agent"]
+        url: request.path
+        queryString: ""
+        clientId: claims.clientId
+        sessionId: claims.sessionId
+    }
+
+callLifecycle(handler, metadata, appRoot)
+    context request
+    context response
+    context log
+    context token
+    if handler == null
+        return null
+    module = handler.module
+    input = from_json(to_json(metadata))
+    if is_kindof(handler.function, Function)
+        return handler.function(input)
+    if is_string(handler.module)
+        moduleFile = resolveModule(appRoot, handler.module)
+        return import_module(moduleFile).then((imported)
+            capture handler, input, request, response, log, token
+            return imported[handler.function](input)
+        )
+    return module[handler.function](input)
+
+test "lifecycle registration rejects unknown and duplicate events"
+    handlers = createLifecycle({})
+    addLifecycle(handlers, { event: "start", function: lifecycleNoop })
+    try
+        addLifecycle(handlers, { event: "start", function: lifecycleNoop })
+        assert false
+    catch error
+        assert error == "ApiDuplicateLifecycleEvent: start"
+    try
+        createLifecycle({ request: lifecycleNoop })
+        assert false
+    catch error
+        assert error == "ApiUnknownLifecycleEvent"
+
+test "lifecycle configuration requires callable handlers"
+    try
+        createLifecycle({ start: {} })
+        assert false
+    catch error
+        assert error == "ApiLifecycleRequiresModuleAndFunction"
+
+lifecycleNoop(input)
+    return null

@@ -69,6 +69,49 @@ routes.endpoint({
 Linked-package rebuilding requires a string package specifier, so the string
 form remains the standard development route form.
 
+### Client and session lifecycle
+
+JWT-enabled hosts can initialize application state before issuing a token:
+
+```lango
+host.on({ event: "register", function: registerClient })
+host.on({ event: "start", module: "@shop/session", function: "startSession" })
+
+registerClient(input)
+    context token
+    context log
+    token.theme = "dark"
+    log.info("Client registered: ${input.clientId}")
+```
+
+Each callback receives one metadata map containing `ip`, an ISO UTC
+`timestamp`, `userAgent`, `url`, `queryString`, `clientId`, and `sessionId`.
+The API currently rejects query parameters, so `queryString` is empty. The IP
+comes from the socket; forwarded headers do not change it. `request`, `response`,
+`token`, and `log` are available through context. Promise callbacks retain context
+through an explicit `capture` as in ordinary handlers.
+
+`register` runs when the server creates a new client identity. `start` runs
+after it for every newly created session, including anonymous requests without
+a bearer token. `POST /_lango/start` with a recoverable signed identity runs
+only `start`, even if the old token has expired. Ordinary requests with a valid
+token run neither callback. Invalid tokens at normal endpoints still produce 401.
+
+Callbacks run sequentially and may return Promises. Their return values are
+ignored; token writes become initial claims. Client and session identities remain
+owned by the service. An exception or rejected Promise returns 500 without a new
+token and skips remaining callbacks and the endpoint handler. External callback
+side effects are not rolled back.
+
+`on` accepts the same function, module object, or npm module reference forms as
+route handlers, using an `event` instead of a `path`. A callback module's exports
+are checked before listening, and linked npm packages are built on startup.
+There is one callback per event; duplicates and unknown events are rejected.
+The equivalent configuration map is `lifecycle: { register: registerClient,
+start: { module: "@shop/session", function: "startSession" } }`. Lifecycle
+callback registration currently uses the library API; XML/CLI bindings, request
+audit, and ping events are pending.
+
 ## Configuration
 
 Configuration is optional. Without a configuration file, the host listens on `127.0.0.1:3000` and uses the documented development or server directory defaults.

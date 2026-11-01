@@ -13,11 +13,16 @@ import "./authorization"
     resolveAuth(spec, definitions)
 import "./jwt_configuration"
     configureTokenService(configuration)
+import "./lifecycle"
+    createLifecycle(spec)
+    addLifecycle(handlers, options)
+    lifecycleTargets(handlers)
 
 export class Host
     methods
         routes(routes)
         routesFromXml(apiFile)
+        on(options)
         start()
 
 export class Routes
@@ -29,6 +34,7 @@ export class Routes
 
 Host(configuration)
     @configuration = configuration
+    configuration.lifecycle = createLifecycle(configuration.lifecycle)
     @routes = null
 
 Host:routes(routes)
@@ -39,14 +45,22 @@ Host:routesFromXml(apiFile)
     @routes = loadRoutes(apiFile)
     return this
 
+Host:on(options)
+    configuration = @configuration
+    addLifecycle(configuration.lifecycle, options)
+    return this
+
 Host:start()
     if @routes == null
         throw "ApiRoutesNotConfigured"
     configuration = @configuration
     configureTokenService(configuration)
     routes = @routes
-    prepareLinkedPackages(configuration.appRoot, routes)
-    return validateRouteModules(configuration.appRoot, routes).then(()
+    targets = routes.slice()
+    for lifecycleTargets(configuration.lifecycle) as target
+        targets.add(target)
+    prepareLinkedPackages(configuration.appRoot, targets)
+    return validateRouteModules(configuration.appRoot, targets).then(()
         capture configuration, routes
         return startServer(configuration, routes)
     )
@@ -161,3 +175,11 @@ allowAuthForTest(path, input)
 
 denyAuthForTest(path, input)
     return false
+
+test "startup rejects a missing lifecycle module export"
+    handlers = createLifecycle({ start: { module: {}, function: "missing" } })
+    try
+        validateRouteModules("/tmp", lifecycleTargets(handlers))
+        assert false
+    catch error
+        assert error == "ApiHandlerNotExported: lifecycle:start -> missing"

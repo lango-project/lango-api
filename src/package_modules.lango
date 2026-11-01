@@ -51,10 +51,21 @@ prepareLinkedPackages(appRoot, routes)
     prepared = []
     targets = validationTargets(routes)
     for targets as route
-        if is_string(route.mod) and not prepared.includes(route.mod)
-            buildLinkedPackage(appRoot, route.mod)
-            prepared.add(route.mod)
+        packageName = linkedPackageName(route.mod)
+        if packageName != null and not prepared.includes(packageName)
+            buildLinkedPackage(appRoot, packageName)
+            prepared.add(packageName)
     return null
+
+linkedPackageName(moduleName)
+    if not is_string(moduleName)
+        return null
+    if path.isAbsolute(moduleName) or moduleName.startsWith(".") or moduleName.startsWith("node:")
+        return null
+    parts = moduleName.split("/")
+    if moduleName.startsWith("@") and parts.length >= 2
+        return parts[0] + "/" + parts[1]
+    return parts[0]
 
 resolveModule(appRoot, moduleName)
     resolver = nodeModule/createRequire(path.resolve(appRoot, "package.json"))
@@ -112,6 +123,13 @@ test "ordinary npm package manifests do not request a Lango build"
 test "module resolution uses the application package context"
     assert resolveModule("/tmp/lango-app", "node:fs") == "node:fs"
     assert resolveModule(".", "node:fs") == "node:fs"
+
+test "linked builds use package roots and skip file and native module references"
+    assert linkedPackageName("@shop/hooks/register") == "@shop/hooks"
+    assert linkedPackageName("hooks/register") == "hooks"
+    assert linkedPackageName("node:fs") == null
+    assert linkedPackageName(path.resolve("hooks.mjs")) == null
+    assert linkedPackageName("./hooks.mjs") == null
 
 test "startup rejects a missing auth module export"
     handler = (input)

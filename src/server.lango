@@ -9,6 +9,9 @@ import "./package_modules"
     resolveModule(appRoot, moduleName)
 import "./authorization"
     createAuth(spec)
+import "./lifecycle"
+    createLifecycle(spec)
+    initializeSession(session, handlers, appRoot)
 
 global promises = globalThis.Promise
 
@@ -180,6 +183,7 @@ sendResult(response, log, request, result)
 
 start(configuration, routes)
     context log
+    configuration.lifecycle = createLifecycle(configuration.lifecycle)
     for routes as configured
         configured.auth = createAuth(configured.auth)
     if configuration.tokenService != null
@@ -216,12 +220,13 @@ start(configuration, routes)
         appRoot = configuration.appRoot
         tokenService = configuration.tokenService
         authorization = httpRequest.headers.authorization
+        lifecycle = configuration.lifecycle
         httpRequest.on("data", (chunk)
             capture body
             body = body + chunk.toString()
         )
         httpRequest.on("end", ()
-            capture appRoot, route, apiResponse, apiRequest, requestLog, request, response, token, log, body, tokenService, authorization
+            capture appRoot, route, apiResponse, apiRequest, requestLog, request, response, token, log, body, tokenService, authorization, lifecycle
             input = {}
             try
                 if body != ""
@@ -231,7 +236,7 @@ start(configuration, routes)
                 apiResponse.status(400).send({ error: "BadRequest", requestId: apiRequest.id })
                 return
             try
-                authenticate(tokenService, authorization, route, input, appRoot)
+                authenticate(tokenService, authorization, route, input, appRoot, lifecycle)
             catch error
                 sendFailure(apiResponse, requestLog, apiRequest)
         )
@@ -263,7 +268,7 @@ unauthorized()
     response.status(401).send({ error: "Unauthorized", requestId: request.id })
     return null
 
-authenticate(service, authorization, route, input, appRoot)
+authenticate(service, authorization, route, input, appRoot, lifecycle)
     context request
     context response
     context log
@@ -275,18 +280,11 @@ authenticate(service, authorization, route, input, appRoot)
     catch error
         return unauthorized()
     if route.bootstrap == true
-        return service.restart(raw).then((claims)
-            capture request, response, log
-            response.bindToken(claims)
-            response.send({ clientId: claims.clientId, sessionId: claims.sessionId })
-        )
+        return beginSession(service, raw, lifecycle, route, input, appRoot)
     if raw == null
         if route.anonymous != true
             return unauthorized()
-        return service.restart(raw).then((claims)
-            capture route, input, appRoot, request, response, log
-            return invokeWithToken(claims, route, input, appRoot)
-        )
+        return beginSession(service, raw, lifecycle, route, input, appRoot)
     verified = service.verify(raw).catch((error)
         capture response, request, log
         return unauthorized()
@@ -298,6 +296,30 @@ authenticate(service, authorization, route, input, appRoot)
         capture response, request, log
         sendFailure(response, log, request)
     )
+
+beginSession(service, raw, lifecycle, route, input, appRoot)
+    context request
+    context response
+    context log
+    return service.startSession(raw).then((session)
+        capture lifecycle, appRoot, request, response, log
+        return initializeSession(session, lifecycle, appRoot)
+    ).then((claims)
+        capture route, input, appRoot, request, response, log
+        return completeSession(claims, route, input, appRoot)
+    ).catch((error)
+        capture request, response, log
+        sendFailure(response, log, request)
+    )
+
+completeSession(claims, route, input, appRoot)
+    context response
+    if response.completed()
+        return null
+    if route.bootstrap == true
+        response.bindToken(claims)
+        return response.send({ clientId: claims.clientId, sessionId: claims.sessionId })
+    return invokeWithToken(claims, route, input, appRoot)
 
 continueVerified(claims, route, input, appRoot)
     if routeMissing(claims)

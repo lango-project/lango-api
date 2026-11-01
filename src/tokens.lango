@@ -10,6 +10,7 @@ export class TokenService
         verify(token)
         verifySigned(token)
         restart(token)
+        startSession(token)
         recoverClient(token)
 
 TokenService(options)
@@ -99,15 +100,20 @@ verifiedPayload(verified)
     return verified.payload
 
 TokenService:restart(token)
+    return this.startSession(token).then((session)
+        return session.claims
+    )
+
+TokenService:startSession(token)
     global promises
     service = this
     return promises.resolve().then(()
         capture service, token
-        return service.recoverClient(token)
+        return recoverIdentity(service, token)
     ).catch((error)
-        return newClientId()
-    ).then((clientId)
-        return restartedClaims(clientId)
+        return newIdentity()
+    ).then((identity)
+        return { claims: restartedClaims(identity.clientId), registered: identity.registered }
     )
 
 TokenService:recoverClient(token)
@@ -123,8 +129,16 @@ TokenService:recoverClient(token)
         return recoveredClientId(verified, issuer, audience)
     )
 
-newClientId()
-    return crypto/randomUUID()
+newIdentity()
+    return { clientId: crypto/randomUUID(), registered: true }
+
+recoveredIdentity(clientId)
+    return { clientId: clientId, registered: false }
+
+recoverIdentity(service, token)
+    return service.recoverClient(token).then((clientId)
+        return recoveredIdentity(clientId)
+    )
 
 restartedClaims(clientId)
     return { clientId: clientId, sessionId: crypto/randomUUID(), auth: false }

@@ -1,0 +1,284 @@
+import js "node:crypto" as crypto
+import js "node:path" as path
+import "./library"
+    class Host
+    class Routes
+import "./tokens"
+    class TokenService
+import "./lifecycle_fixture"
+    alias importedRegistration = registered(input)
+
+global promises = globalThis.Promise
+
+export main(args)
+
+class Harness
+    properties
+        service
+        hooks
+    methods
+        begin()
+        listening(completion)
+        request(path, token, mode = "normal")
+        stop()
+
+Harness(external = false)
+    @external = external
+
+Harness:begin()
+    @service = new TokenService({ issuer: "lifecycle-test", audience: "lifecycle-test", activeKeyId: "test", keys: { test: crypto/randomBytes(32) } })
+    @hooks = new Hooks()
+    routes = new Routes()
+    routes.endpoint({ path: "/open", function: openHandler, anonymous: true })
+    host = new Host({ host: "127.0.0.1", port: 0, appRoot: ".", tokenService: @service })
+    if @external
+        host.on({ event: "register", module: path.resolve(".test-output/lifecycle_fixture.mjs"), function: "registered" })
+      else
+          host.on({ event: "register", function: registered })
+    host.on({ event: "start", module: @hooks, function: "started" })
+    host.routes(routes)
+    harness = this
+    return host.start().then((server)
+        capture harness
+        return harnessReady(harness, server)
+    )
+
+harnessReady(harness, server)
+    harness.server = server
+    ready = new Promise((resolve, reject)
+        capture harness, server
+        registerListening(harness, server, resolve, reject)
+    )
+    return ready
+
+registerListening(harness, server, resolve, reject)
+    completion = { resolve: resolve, reject: reject }
+    server.once("listening", ()
+        capture harness, completion
+        harness.listening(completion)
+    )
+    server.once("error", (error)
+        capture completion
+        completion.reject(error)
+    )
+
+Harness:listening(completion)
+    address = this.server.address()
+    @url = "http://127.0.0.1:${address.port}"
+    completion.resolve(this)
+
+Harness:request(path, token, mode = "normal")
+    headers = { "Content-Type": "application/json", "User-Agent": "lifecycle-test", "X-Lifecycle-Test": mode }
+    if token != null
+        headers.Authorization = "Bearer ${token}"
+    url = @url
+    return fetch("${url}${path}", { method: "POST", headers: headers, body: "{}" })
+
+Harness:stop()
+    if this.server != null
+        this.server.close()
+        this.server.closeAllConnections()
+
+registered(input)
+    context request
+    context token
+    context log
+    assert input.url == request.path
+    assert input.userAgent == "lifecycle-test"
+    assert input.ip != ""
+    assert is_string(input.timestamp)
+    assert input.clientId == token.clientId
+    assert input.sessionId == token.sessionId
+    token.trace = ["register"]
+    token.theme = "dark"
+    token.clientId = "must-not-replace-client"
+    input.clientId = "must-not-replace-metadata"
+    if request.headers["x-lifecycle-test"] == "register-fail"
+        token.auth = true
+        throw "ExpectedRegisterFailure"
+    log.debug("Register callback completed")
+    return null
+
+class Hooks
+    properties
+        calls
+    methods
+        started(input)
+
+Hooks()
+    @calls = 0
+
+Hooks:started(input)
+    global promises
+    context request
+    context token
+    context log
+    @calls++
+    assert input.clientId == token.clientId
+    assert input.sessionId == token.sessionId
+    assert token.clientId != "must-not-replace-client"
+    if token.trace == null
+        token.trace = []
+    token.trace.add("start")
+    token.sessionId = "must-not-replace-session"
+    mode = request.headers["x-lifecycle-test"]
+    if mode == "start-fail"
+        token.auth = true
+        throw "ExpectedStartFailure"
+    return promises.resolve().then(()
+        capture token, request, mode, log
+        return completeStart(mode)
+    )
+
+completeStart(mode)
+    context request
+    context token
+    context log
+    assert request.path == "/_lango/start" or request.path == "/open"
+    if mode == "start-reject"
+        token.auth = true
+        throw "ExpectedAsyncStartFailure"
+    token.started = true
+    log.debug("Start callback completed")
+    return null
+
+openHandler(input)
+    context token
+    assert token.started
+    return { ok: true }
+
+main(args)
+    harness = new Harness()
+    return harness.begin().then((ready)
+        capture harness
+        return checkNew(harness)
+    ).finally(()
+        capture harness
+        harness.stop()
+    ).then(()
+        return checkImportedLifecycle()
+    )
+
+checkImportedLifecycle()
+    harness = new Harness(true)
+    return harness.begin().then((ready)
+        capture harness
+        return importedRequest(harness)
+    ).finally(()
+        capture harness
+        harness.stop()
+    )
+
+importedRequest(harness)
+    return harness.request("/_lango/start", null).then((response)
+        capture harness
+        assert response.status == 200
+        token = response.headers.get("X-Lango-Token")
+        return importedClaims(harness, token)
+    )
+
+importedClaims(harness, token)
+    return harness.service.verify(token).then((claims)
+        assert claims.importedRegistration
+        assert claims.started
+        println("PASS lifecycle callback resolves an imported module and preserves context")
+    )
+
+checkNew(harness)
+    return harness.request("/_lango/start", null).then((response)
+        capture harness
+        assert response.status == 200
+        token = response.headers.get("X-Lango-Token")
+        return newClaims(harness, token)
+    )
+
+newClaims(harness, token)
+    return harness.service.verify(token).then((claims)
+        capture harness, token
+        assert to_json(claims.trace) == "[\"register\",\"start\"]"
+        assert claims.theme == "dark"
+        assert claims.started
+        assert !claims.auth
+        assert claims.sessionId != "must-not-replace-session"
+        assert harness.hooks.calls == 1
+        return checkReturning(harness, token, claims)
+    )
+
+checkReturning(harness, token, previous)
+    return harness.request("/_lango/start", token).then((response)
+        capture harness, previous
+        assert response.status == 200
+        renewed = response.headers.get("X-Lango-Token")
+        return returningClaims(harness, renewed, previous)
+    )
+
+returningClaims(harness, token, previous)
+    return harness.service.verify(token).then((claims)
+        capture harness, token, previous
+        assert to_json(claims.trace) == "[\"start\"]"
+        assert claims.clientId == previous.clientId
+        assert claims.sessionId != previous.sessionId
+        assertThemeCleared(claims)
+        assert harness.hooks.calls == 2
+        return checkExistingRequest(harness, token)
+    )
+
+assertThemeCleared(claims)
+    assert claims.theme == null
+    return null
+
+checkExistingRequest(harness, token)
+    return harness.request("/open", token).then((response)
+        capture harness, token
+        assert response.status == 200
+        assert harness.hooks.calls == 2
+        return checkTampered(harness, token)
+    )
+
+checkTampered(harness, token)
+    return harness.request("/_lango/start", token + "x").then((response)
+        capture harness
+        assert response.status == 200
+        renewed = response.headers.get("X-Lango-Token")
+        return tamperedClaims(harness, renewed)
+    )
+
+tamperedClaims(harness, token)
+    return harness.service.verify(token).then((claims)
+        capture harness
+        assert to_json(claims.trace) == "[\"register\",\"start\"]"
+        return checkAnonymous(harness)
+    )
+
+checkAnonymous(harness)
+    return harness.request("/open", null).then((response)
+        capture harness
+        assert response.status == 200
+        token = response.headers.get("X-Lango-Token")
+        return anonymousClaims(harness, token)
+    )
+
+anonymousClaims(harness, token)
+    return harness.service.verify(token).then((claims)
+        capture harness
+        assert to_json(claims.trace) == "[\"register\",\"start\"]"
+        assert claims.started
+        return checkFailure(harness, 0)
+    )
+
+checkFailure(harness, index)
+    modes = ["register-fail", "start-fail", "start-reject"]
+    if index == modes.length
+        println("PASS lifecycle: registration, restart, context, async callbacks, stable identities and failure without tokens")
+        return null
+    mode = modes[index]
+    return harness.request("/_lango/start", null, mode).then((response)
+        capture harness, index
+        assertLifecycleFailure(response)
+        return checkFailure(harness, index + 1)
+    )
+
+assertLifecycleFailure(response)
+    assert response.status == 500
+    assert response.headers.get("X-Lango-Token") == null
+    return null

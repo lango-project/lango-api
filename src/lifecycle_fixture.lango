@@ -1,0 +1,9 @@
+export registered(input)
+
+registered(input)
+    context token
+    context request
+    assert input.clientId == token.clientId
+    assert input.url == request.path
+    token.importedRegistration = true
+    return null

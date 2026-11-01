@@ -100,10 +100,20 @@ checkExpiredIdentity()
 
 restartExpired(service, token)
     return service.restart(token).then((claims)
+        capture service, token
         assert claims.clientId == "stable-client"
         assert !claims.auth
         assertFormCleared(claims)
         println("PASS expired signed tokens recover only client identity, never auth or form claims")
+        return classifyExpired(service, token)
+    )
+
+classifyExpired(service, token)
+    return service.startSession(token).then((session)
+        assert !session.registered
+        assert session.claims.clientId == "stable-client"
+        assert !session.claims.auth
+        println("PASS expired identity recovery does not register the client again")
     )
 
 assertFormCleared(claims)
