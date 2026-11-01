@@ -1,0 +1,9 @@
+<conf>
+  <http host="127.0.0.1" port="3000" />
+  <jwt
+    issuer="my-application"
+    audience="my-application-client"
+    keysFile="jwt.keys.json"
+    activeKeyId="current"
+    ttlSeconds="900" />
+</conf>

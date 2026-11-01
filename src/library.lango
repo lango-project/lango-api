@@ -11,6 +11,8 @@ import "./server"
 import "./authorization"
     createAuth(spec)
     resolveAuth(spec, definitions)
+import "./jwt_configuration"
+    configureTokenService(configuration)
 
 export class Host
     methods
@@ -41,6 +43,7 @@ Host:start()
     if @routes == null
         throw "ApiRoutesNotConfigured"
     configuration = @configuration
+    configureTokenService(configuration)
     routes = @routes
     prepareLinkedPackages(configuration.appRoot, routes)
     return validateRouteModules(configuration.appRoot, routes).then(()

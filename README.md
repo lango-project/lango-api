@@ -102,6 +102,57 @@ The effective configuration order is command-line options, environment,
 `LANGO_CONFIG`, `LANGO_API`, `LANGO_HOST`, and `LANGO_PORT`. Without an
 explicit API file, the host loads `<appRoot>/deploy/api.xml`.
 
+### JWT configuration
+
+JWT can be enabled from `conf.xml` without constructing a TokenService in code:
+
+```xml
+<conf>
+  <jwt issuer="shop" audience="shop-browser"
+       keysFile="jwt.keys.json" activeKeyId="current" ttlSeconds="900" />
+</conf>
+```
+
+The separate key file is a JSON map of key ids to canonical base64-encoded
+random secrets of at least 32 bytes. For example, replace these placeholders
+with real keys:
+
+```json
+{
+  "current": "<base64-encoded random key>",
+  "previous": "<previous base64-encoded random key>"
+}
+```
+
+The active id selects the signing key; all listed keys may verify tokens.
+Restart after changing the key file or active id. Keys are not generated
+automatically and are never passed as command-line values. Keep the key file
+with machine-specific secrets outside the source worktree.
+
+| CLI option | Environment variable | XML attribute |
+| --- | --- | --- |
+| `--jwt-enabled true|false` | `LANGO_JWT_ENABLED` | `enabled` |
+| `--jwt-issuer` | `LANGO_JWT_ISSUER` | `issuer` |
+| `--jwt-audience` | `LANGO_JWT_AUDIENCE` | `audience` |
+| `--jwt-keys` | `LANGO_JWT_KEYS` | `keysFile` |
+| `--jwt-key-id` | `LANGO_JWT_KEY_ID` | `activeKeyId` |
+| `--jwt-ttl` | `LANGO_JWT_TTL` | `ttlSeconds` |
+
+The precedence remains CLI > environment > XML > defaults. Any JWT section or
+JWT option enables JWT unless `enabled` is explicitly false. Lifetime defaults
+to 900 seconds; issuer, audience, key file and active id are required when
+enabled. An absent JWT configuration preserves legacy mode.
+
+XML-relative key files resolve from the `conf.xml` directory; CLI/environment
+relative paths resolve from the process working directory. An explicitly
+selected missing configuration file is an error. Unknown JWT attributes,
+duplicate JWT sections, unreadable/invalid key files, weak key lengths, and
+missing active ids prevent the host from listening. Key contents are excluded
+from error messages. Examples are included under `examples/`.
+
+Library callers may pass the same map as `configuration.jwt`, or supply an
+explicit `configuration.tokenService`; supplying both is rejected.
+
 ## Handler contract
 
 An endpoint receives its JSON request body as its only explicit argument. HTTP
@@ -170,8 +221,7 @@ path; old authentication and form claims are never restored. Invalid previous
 tokens begin a fresh client identity. Normal endpoint verification still checks
 expiry. The client persists the returned token and resets its local counters.
 
-CLI/XML key configuration, revocation and replay policy remain pending. JWT
-activation currently uses the library configuration. Setting
+Revocation and replay policy remain pending. Setting
 `token.auth = false` issues an anonymous token but does not revoke older tokens.
 
 ## Authorization callbacks

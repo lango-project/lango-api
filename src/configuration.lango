@@ -1,4 +1,6 @@
 import js "node:fs" as fs
+import js "node:path" as path
+import js "node:process" as process
 
 export defaultConfiguration(applicationName)
 export loadConfiguration(applicationName, configurationFile, paths)
@@ -19,11 +21,21 @@ defaultConfiguration(applicationName)
     return {
         applicationName: applicationName,
         host: "127.0.0.1",
-        port: 3000
+        port: 3000,
+        jwt: null
     }
 
 applyXmlConfiguration(configuration, xml)
     conf = xml2obj(xml)
+    if conf.tag() != "conf"
+        throw "ApiConfigurationRootMustBeConf"
+    jwtSeen = false
+    for conf.children() as child
+        if child.tag() == "jwt"
+            if jwtSeen
+                throw "ApiDuplicateJwtConfiguration"
+            jwtSeen = true
+            applyXmlJwt(configuration, child)
     http = conf.http
     configuredPaths = conf.paths
     if http != null
@@ -44,6 +56,41 @@ applyXmlConfiguration(configuration, xml)
             configuration.apiFile = configuredPaths.apiFile
     return configuration
 
+jwtSettings(configuration)
+    if configuration.jwt == null
+        configuration.jwt = { enabled: true, ttlSeconds: 900 }
+    return configuration.jwt
+
+setJwt(configuration, name, value)
+    jwt = jwtSettings(configuration)
+    if name == "enabled"
+        if value != true and value != false and value != "true" and value != "false"
+            throw "ApiJwtEnabledMustBeBoolean"
+        jwt.enabled = value == true or value == "true"
+      else
+          if name == "ttlSeconds"
+              try
+                  jwt.ttlSeconds = to_js_number($(value))
+              catch error
+                  throw "ApiJwtInvalidLifetime"
+            else
+                jwt[name] = value
+    if name == "keysFile"
+        jwt.keysBaseDir = process.cwd()
+    return null
+
+applyXmlJwt(configuration, tag)
+    allowed = ["enabled", "issuer", "audience", "activeKeyId", "keysFile", "ttlSeconds"]
+    jwtSettings(configuration)
+    for tag.attributes() as name: value
+        if not allowed.includes(name)
+            throw "ApiJwtUnknownAttribute: ${name}"
+        setJwt(configuration, name, value)
+    children = tag.children()
+    if children.length > 0 or tag.innerText().trim() != ""
+        throw "ApiJwtConfigurationMustUseAttributes"
+    return null
+
 loadConfiguration(applicationName, configurationFile, paths)
     configuration = defaultConfiguration(applicationName)
     configuration.appRoot = paths.appRoot
@@ -54,6 +101,8 @@ loadConfiguration(applicationName, configurationFile, paths)
     if fs.existsSync(configurationFile)
         xml = fs.readFileSync(configurationFile, "utf8")
         applyXmlConfiguration(configuration, xml)
+        if configuration.jwt != null
+            configuration.jwt.keysBaseDir = path.dirname(path.resolve(configurationFile))
 
     return configuration
 
@@ -72,6 +121,10 @@ applyEnvironmentConfiguration(configuration, environment)
         configuration.host = environment.LANGO_HOST
     if is_string(environment.LANGO_PORT)
         configuration.port = parsePort(environment.LANGO_PORT)
+    mapping = { LANGO_JWT_ENABLED: "enabled", LANGO_JWT_ISSUER: "issuer", LANGO_JWT_AUDIENCE: "audience", LANGO_JWT_KEYS: "keysFile", LANGO_JWT_KEY_ID: "activeKeyId", LANGO_JWT_TTL: "ttlSeconds" }
+    for mapping as variable: name
+        if is_string(environment[variable])
+            setJwt(configuration, name, environment[variable])
     return configuration
 
 applyOptionConfiguration(configuration, options)
@@ -89,12 +142,16 @@ applyOptionConfiguration(configuration, options)
         configuration.host = options.host
     if options.port != null
         configuration.port = parsePort(options.port)
+    mapping = { jwtEnabled: "enabled", jwtIssuer: "issuer", jwtAudience: "audience", jwtKeys: "keysFile", jwtKeyId: "activeKeyId", jwtTtl: "ttlSeconds" }
+    for mapping as option: name
+        if options[option] != null
+            setJwt(configuration, name, options[option])
     return configuration
 
 validateConfiguration(configuration)
-    if not is_string(configuration.appRoot) or configuration.appRoot == ""
+    if !is_string(configuration.appRoot) or configuration.appRoot == ""
         throw "ApiAppRootMustBeConfigured"
-    if not is_string(configuration.host) or configuration.host == ""
+    if !is_string(configuration.host) or configuration.host == ""
         throw "ApiHostMustBeConfigured"
     configuration.port = parsePort(configuration.port)
     return configuration
@@ -131,3 +188,33 @@ test "configuration rejects an invalid port"
         assert false
     catch error
         assert error == "ApiPortMustBeAnIntegerBetween1And65535"
+
+test "JWT settings follow XML environment and CLI precedence"
+    configuration = defaultConfiguration("shop")
+    applyXmlConfiguration(configuration, "<conf><jwt issuer=\"xml\" audience=\"browser\" keysFile=\"keys.json\" activeKeyId=\"current\" ttlSeconds=\"600\" /></conf>")
+    applyEnvironmentConfiguration(configuration, { LANGO_JWT_ISSUER: "environment", LANGO_JWT_TTL: "1200" })
+    applyOptionConfiguration(configuration, { jwtIssuer: "cli", jwtTtl: "1800" })
+    assert configuration.jwt.issuer == "cli"
+    assert configuration.jwt.audience == "browser"
+    assert configuration.jwt.ttlSeconds == 1800
+    assert configuration.jwt.enabled
+
+test "JWT configuration rejects misspelled attributes and duplicate sections"
+    configuration = defaultConfiguration("shop")
+    try
+        applyXmlConfiguration(configuration, "<conf><jwt keys=\"secret\" /></conf>")
+        assert false
+    catch error
+        assert error == "ApiJwtUnknownAttribute: keys"
+    try
+        applyXmlConfiguration(configuration, "<conf><jwt /><jwt /></conf>")
+        assert false
+    catch error
+        assert error == "ApiDuplicateJwtConfiguration"
+
+test "JWT explicit disable can override lower settings"
+    configuration = defaultConfiguration("shop")
+    applyXmlConfiguration(configuration, "<conf><jwt issuer=\"xml\" /></conf>")
+    applyEnvironmentConfiguration(configuration, { LANGO_JWT_ENABLED: "true" })
+    applyOptionConfiguration(configuration, { jwtEnabled: "false" })
+    assert !configuration.jwt.enabled

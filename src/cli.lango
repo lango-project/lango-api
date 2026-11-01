@@ -1,6 +1,7 @@
 import js "node:os" as os
 import js "node:path" as path
 import js "node:process" as process
+import js "node:fs" as fs
 import "./application_paths"
     developmentPaths(applicationName, home, localAppData, platform)
     serverPaths(applicationName, programData, programFiles, platform)
@@ -19,7 +20,7 @@ export configurationFileFor(paths, options, environment)
 export apiFileFor(configuration, options, environment)
 
 usage()
-    return "Usage: lango-api <app> [development|server] [--app-root <path>] [--data-dir <path>] [--state-dir <path>] [--log-dir <path>] [--config <file>] [--api <file>] [--host <host>] [--port <port>]"
+    return "Usage: lango-api <app> [development|server] [--app-root <path>] [--data-dir <path>] [--state-dir <path>] [--log-dir <path>] [--config <file>] [--api <file>] [--host <host>] [--port <port>] [--jwt-enabled true|false] [--jwt-issuer <issuer>] [--jwt-audience <audience>] [--jwt-keys <file>] [--jwt-key-id <id>] [--jwt-ttl <seconds>]"
 
 newOptions(applicationName)
     return {
@@ -32,7 +33,13 @@ newOptions(applicationName)
         configFile: null,
         apiFile: null,
         host: null,
-        port: null
+        port: null,
+        jwtEnabled: null,
+        jwtIssuer: null,
+        jwtAudience: null,
+        jwtKeys: null,
+        jwtKeyId: null,
+        jwtTtl: null
     }
 
 setOption(options, option, value)
@@ -52,10 +59,24 @@ setOption(options, option, value)
         options.host = value
     if option == "--port"
         options.port = value
+    if option == "--jwt-enabled"
+        options.jwtEnabled = value
+    if option == "--jwt-issuer"
+        options.jwtIssuer = value
+    if option == "--jwt-audience"
+        options.jwtAudience = value
+    if option == "--jwt-keys"
+        options.jwtKeys = value
+    if option == "--jwt-key-id"
+        options.jwtKeyId = value
+    if option == "--jwt-ttl"
+        options.jwtTtl = value
     return options
 
 knownOption(option)
-    return option == "--app-root" or option == "--data-dir" or option == "--state-dir" or option == "--log-dir" or option == "--config" or option == "--api" or option == "--host" or option == "--port"
+    standard = ["--app-root", "--data-dir", "--state-dir", "--log-dir", "--config", "--api", "--host", "--port"]
+    jwt = ["--jwt-enabled", "--jwt-issuer", "--jwt-audience", "--jwt-keys", "--jwt-key-id", "--jwt-ttl"]
+    return standard.includes(option) or jwt.includes(option)
 
 parseArguments(args)
     if args.length == 0
@@ -68,6 +89,8 @@ parseArguments(args)
     for args as index: argument
         if index > 0
             if pendingOption != null
+                if knownOption(argument)
+                    throw "ApiOptionRequiresValue: ${pendingOption}"
                 setOption(options, pendingOption, argument)
                 pendingOption = null
               else
@@ -113,6 +136,9 @@ main(args)
         options = parseArguments(args)
         paths = selectPaths(options.applicationName, options.mode, os.homedir(), process.env.LOCALAPPDATA, process.platform, process.env.ProgramData, process.env.ProgramFiles)
         configurationFile = configurationFileFor(paths, options, process.env)
+        if options.configFile != null or is_string(process.env.LANGO_CONFIG)
+            if not fs.existsSync(configurationFile)
+                throw "ApiConfigurationFileNotFound: ${configurationFile}"
         configuration = loadConfiguration(options.applicationName, configurationFile, paths)
         applyEnvironmentConfiguration(configuration, process.env)
         applyOptionConfiguration(configuration, options)
@@ -124,10 +150,18 @@ main(args)
             capture configuration, log
             log.info("lango-api listening on ${configuration.host}:${configuration.port}")
             return server
+        ).catch((error)
+            capture log
+            return startupFailed(error)
         )
     catch error
-        log.err("lango-api: ${error}")
-        process.exitCode = 1
+        startupFailed(error)
+    return null
+
+startupFailed(error)
+    context log
+    log.err("lango-api: ${error}")
+    process.exitCode = 1
     return null
 
 test "CLI parses its mode and explicit paths"
@@ -136,6 +170,17 @@ test "CLI parses its mode and explicit paths"
     assert options.mode == "server"
     assert options.appRoot == "/app"
     assert options.port == "3010"
+
+test "CLI accepts JWT options and rejects missing option values"
+    options = parseArguments(["shop", "--jwt-keys", "keys.json", "--jwt-issuer", "shop", "--jwt-audience", "browser", "--jwt-key-id", "current", "--jwt-ttl", "900"])
+    assert options.jwtKeys == "keys.json"
+    assert options.jwtIssuer == "shop"
+    assert options.jwtTtl == "900"
+    try
+        parseArguments(["shop", "--jwt-keys", "--port", "3000"])
+        assert false
+    catch error
+        assert error == "ApiOptionRequiresValue: --jwt-keys"
 
 test "CLI gives explicit configuration precedence"
     paths = { configFile: "/default/conf.xml" }

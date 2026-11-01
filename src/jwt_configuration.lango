@@ -1,0 +1,129 @@
+import js "node:fs" as fs
+import js "node:path" as path
+import js "node:buffer" as buffer
+import js "node:os" as os
+import js "node:crypto" as crypto
+import "./tokens"
+    class TokenService
+import "./configuration"
+    loadConfiguration(applicationName, configurationFile, paths)
+
+export configureTokenService(configuration)
+export loadTokenService(settings)
+export decodeKeys(text)
+
+configureTokenService(configuration)
+    settings = configuration.jwt
+    if settings == null
+        return configuration
+    if configuration.tokenService != null
+        if configuration.tokenService != configuration.configuredJwtService
+            throw "ApiJwtConflictsWithTokenService"
+        return configuration
+    if settings.enabled == false
+        return configuration
+    service = loadTokenService(settings)
+    configuration.tokenService = service
+    configuration.configuredJwtService = service
+    return configuration
+
+loadTokenService(settings)
+    if !is_string(settings.keysFile) or settings.keysFile.trim() == ""
+        throw "ApiJwtKeysFileRequired"
+    base = settings.keysBaseDir
+    if base == null
+        base = "."
+    file = path.resolve(base, settings.keysFile)
+    text = ""
+    try
+        text = fs.readFileSync(file, "utf8")
+    catch error
+        throw "ApiJwtKeysFileUnreadable: ${file}"
+    keys = decodeKeys(text)
+    return new TokenService({
+        issuer: settings.issuer
+        audience: settings.audience
+        activeKeyId: settings.activeKeyId
+        keys: keys
+        ttlSeconds: settings.ttlSeconds
+    })
+
+decodeKeys(text)
+    encoded = null
+    try
+        encoded = from_json(text)
+    catch error
+        throw "ApiJwtKeysFileMustBeJsonMap"
+    if not is_object(encoded)
+        throw "ApiJwtKeysFileMustBeJsonMap"
+    keys = {}
+    count = 0
+    for encoded as id: value
+        if id == "" or id == "__proto__" or id == "constructor" or id == "prototype"
+            throw "ApiJwtInvalidKeyId"
+        if !is_string(value) or value == ""
+            throw "ApiJwtKeyMustBeBase64"
+        key = buffer/Buffer/from(value, "base64")
+        if key.toString("base64") != value
+            throw "ApiJwtKeyMustBeBase64"
+        if key.length < 32
+            throw "ApiTokenKeyRequiresAtLeast32Bytes"
+        keys[id] = key
+        count++
+    if count == 0
+        throw "ApiJwtKeysFileMustNotBeEmpty"
+    return keys
+
+test "JWT keys load relative to the XML configuration file"
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), "lango-jwt-config-"))
+    key = crypto/randomBytes(32)
+    file = path.join(directory, "keys.json")
+    confFile = path.join(directory, "conf.xml")
+    try
+        fs.writeFileSync(file, to_json({ current: key.toString("base64") }), { mode: 384 })
+        fs.writeFileSync(confFile, "<conf><jwt issuer=\"shop\" audience=\"browser\" keysFile=\"keys.json\" activeKeyId=\"current\" /></conf>")
+        configuration = loadConfiguration("shop", confFile, { appRoot: directory, dataDir: directory, stateDir: directory, logDir: directory })
+        configureTokenService(configuration)
+        service = configuration.tokenService
+        assert is_kindof(service, TokenService)
+        configureTokenService(configuration)
+        assert configuration.tokenService == service
+    finally
+        fs.unlinkSync(file)
+        fs.unlinkSync(confFile)
+        fs.rmdirSync(directory)
+
+test "JWT disabled configuration does not read a key file"
+    configuration = { jwt: { enabled: false, keysFile: "/missing/keys.json" } }
+    configureTokenService(configuration)
+    assert configuration.tokenService == null
+
+test "JWT key decoding rejects invalid base64 without exposing secret text"
+    try
+        decodeKeys("{\"current\":\"secret-that-must-not-appear-in-errors\"}")
+        assert false
+    catch error
+        assert error == "ApiJwtKeyMustBeBase64"
+    try
+        decodeKeys("{}")
+        assert false
+    catch error
+        assert error == "ApiJwtKeysFileMustNotBeEmpty"
+
+test "JWT configuration rejects missing active keys"
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), "lango-jwt-key-id-"))
+    file = path.join(directory, "keys.json")
+    key = crypto/randomBytes(32)
+    try
+        fs.writeFileSync(file, to_json({ current: key.toString("base64") }), { mode: 384 })
+        expectMissingActiveKey(file)
+    finally
+        fs.unlinkSync(file)
+        fs.rmdirSync(directory)
+
+expectMissingActiveKey(file)
+    try
+        loadTokenService({ keysFile: file, issuer: "shop", audience: "browser", activeKeyId: "missing" })
+        assert false
+    catch error
+        assert error == "ApiTokenActiveKeyNotFound"
