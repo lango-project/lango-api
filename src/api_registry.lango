@@ -22,10 +22,14 @@ createEndpoint(options)
     path = options.path
     mod = options.module
     func = options.function
-    if not is_string(path) or path == "" or func == null
+    if (not is_string(path)) or path == "" or func == null
         throw "ApiEndpointRequiresPathAndFunc"
     if path[0] != "/"
         throw "ApiEndpointPathMustStartWithSlash"
+    if path.includes("*") and not path.endsWith("/*")
+        throw "ApiWildcardMustBeTrailingSlashStar"
+    if path.indexOf("*") != path.lastIndexOf("*")
+        throw "ApiWildcardMustBeTrailingSlashStar"
     moduleName = null
     moduleValue = mod
     if is_string(mod)
@@ -47,8 +51,9 @@ createEndpoint(options)
 addRoute(routes, endpoint)
     if endpoint.func != null and endpoint.mod == null and endpoint.module == null
         throw "ApiEndpointStringFunctionRequiresModule"
-    if not routeMissing(findRoute(routes, endpoint.path))
-        throw "ApiDuplicateEndpointPath"
+    for routes as existing
+        if existing.path == endpoint.path
+            throw "ApiDuplicateEndpointPath"
     routes.add(endpoint)
     return endpoint
 
@@ -102,13 +107,28 @@ collectRoutes(tag, parentPath, parentMod, routes)
                     throw "ApiConfigUnknownTag: <${childTag}>"
 
 findRoute(routes, requestPath)
+    best = null
+    bestLength = 0
     for routes as route
         if route.path == requestPath
             return route
-    return null
+        if route.path.endsWith("/*")
+            prefix = route.path.slice(0, -1)
+            if requestPath.startsWith(prefix) and prefix.length > bestLength
+                best = route
+                bestLength = prefix.length
+    return best
 
 routeMissing(route)
     return route == null
+
+test "exact routes win over the longest wildcard independently of registration order"
+    routes = routesFromXml("<api><endpoint path=\"/app/*\" mod=\"ui\" func=\"handle\" /><endpoint path=\"/app/admin/*\" mod=\"admin\" func=\"handle\" /><endpoint path=\"/app/admin/save\" mod=\"save\" func=\"handle\" /></api>")
+    exact = findRoute(routes, "/app/admin/save")
+    nested = findRoute(routes, "/app/admin/edit")
+    assert exact.mod == "save"
+    assert nested.mod == "admin"
+    assert routeMissing(findRoute(routes, "/application/test"))
 
 test "endpoint XML requires its route fields"
     endpoint = endpointFromTag(xml2obj("<endpoint path=\"/math/add\" mod=\"math\" func=\"add\" />"))

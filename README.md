@@ -50,6 +50,11 @@ host.start()
 `host.routesFromXml(apiFile)` is the equivalent XML-based route configuration.
 The CLI is a thin bootstrap over this same API.
 
+Endpoint paths also accept a trailing `/*`, for example `/app/*`. Exact paths
+take precedence; otherwise the longest matching prefix wins. `/app/*` matches
+`/app/` and its descendants, but not `/application` or `/app`. The same syntax
+works in XML and route maps. Duplicate detection compares registered patterns.
+
 Route maps can also hold a module object or a handler function directly. These
 forms bypass npm resolution and are intended for modules that are already
 available to the application:
