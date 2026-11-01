@@ -7,6 +7,10 @@ import "./api_registry"
     routeMissing(route)
 import "./package_modules"
     resolveModule(appRoot, moduleName)
+import "./authorization"
+    createAuth(spec)
+
+global promises = globalThis.Promise
 
 export start(configuration, routes)
 
@@ -176,6 +180,8 @@ sendResult(response, log, request, result)
 
 start(configuration, routes)
     context log
+    for routes as configured
+        configured.auth = createAuth(configured.auth)
     if configuration.tokenService != null
         for routes as configured
             if configured.path == "/_lango/start"
@@ -262,7 +268,7 @@ authenticate(service, authorization, route, input, appRoot)
     context response
     context log
     if service == null
-        return invokeRoute(route, input, appRoot)
+        return authorizeRoute(route, input, appRoot)
     raw = null
     try
         raw = bearerToken(authorization)
@@ -281,13 +287,22 @@ authenticate(service, authorization, route, input, appRoot)
             capture route, input, appRoot, request, response, log
             return invokeWithToken(claims, route, input, appRoot)
         )
-    return service.verify(raw).then((claims)
-        capture route, input, appRoot, request, response, log
-        return invokeWithToken(claims, route, input, appRoot)
-    ).catch((error)
+    verified = service.verify(raw).catch((error)
         capture response, request, log
         return unauthorized()
     )
+    return verified.then((claims)
+        capture route, input, appRoot, request, response, log
+        return continueVerified(claims, route, input, appRoot)
+    ).catch((error)
+        capture response, request, log
+        sendFailure(response, log, request)
+    )
+
+continueVerified(claims, route, input, appRoot)
+    if routeMissing(claims)
+        return null
+    return invokeWithToken(claims, route, input, appRoot)
 
 invokeWithToken(claims, route, input, appRoot)
     context request
@@ -297,6 +312,67 @@ invokeWithToken(claims, route, input, appRoot)
     response.bindToken(claims)
     if route.anonymous != true and claims.auth != true
         return unauthorized()
+    return authorizeRoute(route, input, appRoot)
+
+authorizeRoute(route, input, appRoot)
+    global promises
+    context request
+    context response
+    context token
+    context log
+    if route.auth == null
+        return invokeRoute(route, input, appRoot)
+    return promises.resolve().then(()
+        capture route, input, appRoot, request, response, token, log
+        return callAuth(route.auth, input, appRoot)
+    ).then((allowed)
+        capture route, input, appRoot, request, response, token, log
+        return authorizationResult(allowed, route, input, appRoot)
+    ).catch((error)
+        capture request, response, log
+        authorizationFailed()
+    )
+
+authorizationFailed()
+    context request
+    context response
+    context log
+    log.err("${request.method} ${request.path}: authorization failed")
+    if not response.completed()
+        response.discardTokenChanges()
+        response.status(500).send({ error: "InternalServerError", requestId: request.id })
+    return null
+
+callAuth(auth, input, appRoot)
+    context request
+    context response
+    context token
+    context log
+    if is_kindof(auth.function, Function)
+        return auth.function(request.path, input)
+    if is_string(auth.module)
+        moduleFile = resolveModule(appRoot, auth.module)
+        return import_module(moduleFile).then((module)
+            capture auth, input, request, response, token, log
+            return invokeAuthModule(module, auth.function, input)
+        )
+    return invokeAuthModule(auth.module, auth.function, input)
+
+invokeAuthModule(module, name, input)
+    context request
+    return module[name](request.path, input)
+
+authorizationResult(allowed, route, input, appRoot)
+    context request
+    context response
+    if not is_bool(allowed)
+        throw "ApiAuthMustReturnBoolean"
+    if response.completed()
+        return null
+    if not allowed
+        response.discardTokenChanges()
+        response.status(403).send({ error: "Forbidden", requestId: request.id })
+        return null
     return invokeRoute(route, input, appRoot)
 
 invokeRoute(route, input, appRoot)

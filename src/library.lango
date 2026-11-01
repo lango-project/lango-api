@@ -8,6 +8,9 @@ import "./package_modules"
     validateRouteModules(appRoot, routes)
 import "./server"
     alias startServer = start(configuration, routes)
+import "./authorization"
+    createAuth(spec)
+    resolveAuth(spec, definitions)
 
 export class Host
     methods
@@ -17,6 +20,7 @@ export class Host
 
 export class Routes
     methods
+        auth(options)
         endpoint(options)
         group(options)
         values()
@@ -46,6 +50,18 @@ Host:start()
 
 Routes()
     @items = []
+    @auths = {}
+
+Routes:auth(options)
+    if not is_object(options)
+        throw "ApiAuthDefinitionMustBeMap"
+    name = options.name
+    if !is_string(name) or name == "" or name == "__proto__" or name == "constructor" or name == "prototype"
+        throw "ApiAuthRequiresValidName"
+    if name in @auths
+        throw "ApiDuplicateAuthName: ${name}"
+    @auths[name] = createAuth(options)
+    return this
 
 Routes:endpoint(options)
     addRoute(@items, createEndpoint(options))
@@ -60,9 +76,11 @@ Routes:group(options)
         throw "ApiGroupRequiresPath"
     if path[0] != "/"
         throw "ApiGroupPathMustStartWithSlash"
-    return new RouteGroup(@items, path, mod, anonymousValue(options.anonymous))
+    return new RouteGroup(@items, path, mod, anonymousValue(options.anonymous), options.auth)
 
 Routes:values()
+    for @items as route
+        route.auth = resolveAuth(route.auth, @auths)
     return @items
 
 class RouteGroup
@@ -70,17 +88,20 @@ class RouteGroup
         endpoint(options)
         group(options)
 
-RouteGroup(items, path, mod, anonymous)
+RouteGroup(items, path, mod, anonymous, auth)
     @items = items
     @path = path
     @mod = mod
     @anonymous = anonymous
+    @auth = auth
 
 RouteGroup:endpoint(options)
     endpoint = createEndpoint(options)
     endpoint.path = @path + endpoint.path
     if endpoint.anonymous == null
         endpoint.anonymous = @anonymous
+    if endpoint.auth == null
+        endpoint.auth = @auth
     if endpoint.mod == null and endpoint.module == null
         if is_string(@mod)
             endpoint.mod = @mod
@@ -103,7 +124,10 @@ RouteGroup:group(options)
     anonymous = anonymousValue(options.anonymous)
     if anonymous == null
         anonymous = @anonymous
-    return new RouteGroup(@items, @path + path, mod, anonymous)
+    auth = options.auth
+    if auth == null
+        auth = @auth
+    return new RouteGroup(@items, @path + path, mod, anonymous, auth)
 
 test "route builder groups paths and modules"
     routes = new Routes()
@@ -116,3 +140,21 @@ test "route builder groups paths and modules"
     assert values[0].mod == "@shop/math"
     assert values[1].path == "/math/admin/status"
     assert values[1].mod == "@shop/admin"
+
+test "route builder resolves inherited named auth and direct overrides"
+    routes = new Routes()
+    guard = allowAuthForTest
+    override = denyAuthForTest
+    routes.auth({ name: "guard", function: guard })
+    group = routes.group({ path: "/private", module: "app", auth: "guard" })
+    group.endpoint({ path: "/first", function: "first" })
+    group.endpoint({ path: "/second", function: "second", auth: override })
+    values = routes.values()
+    assert values[0].auth.function == guard
+    assert values[1].auth.function == override
+
+allowAuthForTest(path, input)
+    return true
+
+denyAuthForTest(path, input)
+    return false

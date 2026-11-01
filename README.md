@@ -170,9 +170,50 @@ path; old authentication and form claims are never restored. Invalid previous
 tokens begin a fresh client identity. Normal endpoint verification still checks
 expiry. The client persists the returned token and resets its local counters.
 
-Custom auth callbacks, CLI/XML key configuration, revocation and replay policy
-remain pending. JWT activation currently uses the library configuration. Setting
+CLI/XML key configuration, revocation and replay policy remain pending. JWT
+activation currently uses the library configuration. Setting
 `token.auth = false` issues an anonymous token but does not revoke older tokens.
+
+## Authorization callbacks
+
+Routes and groups accept `auth` as a function reference, a named auth rule, or
+`{ module, function }`. Module values may be npm specifiers or already loaded
+module objects:
+
+```lango
+routes.auth({
+    name: "access"
+    function: checkAccess
+})
+private = routes.group({ path: "/private", auth: "access" })
+private.endpoint({ path: "/save", module: "@shop/orders", function: "save" })
+
+checkAccess(path, input)
+    context token
+    return token.role == "admin"
+```
+
+XML supports top-level definitions before or after their uses:
+
+```xml
+<api>
+  <auth name="access" mod="@shop/security" func="checkAccess" />
+  <group path="/private" auth="access">
+    <endpoint path="/save" mod="@shop/orders" func="save" />
+  </group>
+</api>
+```
+
+The nearest group's auth rule is inherited; an explicit child rule overrides
+it. The rule runs after the default JWT/auth check and receives the actual path
+and input, with request/response/token/log contexts available. Promise results
+are supported. Only Boolean true permits the endpoint handler. False produces
+403; exceptions, rejections or non-Boolean results produce 500. Denial and
+errors discard token mutations before renewal. Anonymous routes still run
+custom auth, as do legacy hosts without a TokenService.
+
+The Host validates auth modules/exports before listening and rebuilds linked
+packages used only by auth rules too. Direct module calls preserve their receiver.
 
 ## Application packages
 

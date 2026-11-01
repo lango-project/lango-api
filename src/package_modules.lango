@@ -3,6 +3,8 @@ import js "node:fs" as fs
 import js "node:module" as nodeModule
 import js "node:path" as path
 import js "node:process" as process
+import "./authorization"
+    createAuth(spec)
 
 export prepareLinkedPackages(appRoot, routes)
 export resolveModule(appRoot, moduleName)
@@ -47,27 +49,46 @@ buildLinkedPackage(appRoot, moduleName)
 
 prepareLinkedPackages(appRoot, routes)
     prepared = []
-    for routes as route
+    targets = validationTargets(routes)
+    for targets as route
         if is_string(route.mod) and not prepared.includes(route.mod)
             buildLinkedPackage(appRoot, route.mod)
             prepared.add(route.mod)
     return null
 
 resolveModule(appRoot, moduleName)
-    resolver = nodeModule/createRequire(path.join(appRoot, "package.json"))
+    resolver = nodeModule/createRequire(path.resolve(appRoot, "package.json"))
     return resolver.resolve(moduleName)
 
 validateRouteModules(appRoot, routes)
-    return validateRouteModuleAt(appRoot, routes, 0)
+    return validateRouteModuleAt(appRoot, validationTargets(routes), 0)
+
+validationTargets(routes)
+    targets = []
+    for routes as route
+        targets.add(route)
+        auth = createAuth(route.auth)
+        if auth != null
+            if is_string(auth.function)
+                moduleName = null
+                moduleValue = auth.module
+                if is_string(auth.module)
+                    moduleName = auth.module
+                    moduleValue = null
+                targets.add({ path: "${route.path} (auth)", mod: moduleName, module: moduleValue, func: auth.function })
+    return targets
 
 moduleExportsFunction(module, name)
-    return module[name] != null
+    return is_kindof(module[name], Function)
 
 validateRouteModuleAt(appRoot, routes, index)
     if index >= routes.length
         return import_module("node:fs")
     route = routes[index]
     if not is_string(route.mod)
+        if is_string(route.func) and route.module != null
+            if not moduleExportsFunction(route.module, route.func)
+                throw "ApiHandlerNotExported: ${route.path} -> ${route.func}"
         return validateRouteModuleAt(appRoot, routes, index + 1)
     moduleFile = resolveModule(appRoot, route.mod)
     return import_module(moduleFile).then((module)
@@ -90,3 +111,13 @@ test "ordinary npm package manifests do not request a Lango build"
 
 test "module resolution uses the application package context"
     assert resolveModule("/tmp/lango-app", "node:fs") == "node:fs"
+    assert resolveModule(".", "node:fs") == "node:fs"
+
+test "startup rejects a missing auth module export"
+    handler = (input)
+        return input
+    try
+        validateRouteModules("/tmp", [{ path: "/private", handler: handler, auth: { module: {}, function: "missing" } }])
+        assert false
+    catch error
+        assert error == "ApiHandlerNotExported: /private (auth) -> missing"

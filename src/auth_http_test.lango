@@ -1,8 +1,13 @@
 import js "node:crypto" as crypto
+import js "node:path" as path
 import "./server"
     start(configuration, routes)
 import "./tokens"
     class TokenService
+import "./auth_fixture"
+    allow(path, input)
+
+global promises = globalThis.Promise
 
 export main(args)
 
@@ -17,7 +22,16 @@ class Harness
 
 Harness:begin()
     @service = new TokenService({ issuer: "http-test", audience: "http-test", activeKeyId: "test", keys: { test: crypto/randomBytes(32) } })
-    server = start({ host: "127.0.0.1", port: 0, appRoot: ".", tokenService: @service }, [{ path: "/private", handler: privateHandler }, { path: "/login", handler: loginHandler, anonymous: true }, { path: "/boom", handler: brokenHandler }, { path: "/failed-login", handler: failedLogin, anonymous: true }])
+    routes = [{ path: "/private", handler: privateHandler }, { path: "/login", handler: loginHandler, anonymous: true }, { path: "/boom", handler: brokenHandler }, { path: "/failed-login", handler: failedLogin, anonymous: true }]
+    routes.add({ path: "/auth/allow", handler: privateHandler, auth: allowPolicy })
+    routes.add({ path: "/auth/deny", handler: privateHandler, auth: denyPolicy })
+    routes.add({ path: "/auth/public-deny", handler: privateHandler, anonymous: true, auth: denyPolicy })
+    routes.add({ path: "/auth/reject", handler: privateHandler, auth: rejectPolicy })
+    routes.add({ path: "/auth/invalid", handler: privateHandler, auth: invalidPolicy })
+    routes.add({ path: "/auth/async", handler: privateHandler, auth: asyncPolicy })
+    routes.add({ path: "/auth/module", handler: privateHandler, auth: { module: new Policy(), function: "check" } })
+    routes.add({ path: "/auth/external", handler: privateHandler, auth: { module: path.resolve(".test-output/auth_fixture.mjs"), function: "allow" } })
+    server = start({ host: "127.0.0.1", port: 0, appRoot: ".", tokenService: @service }, routes)
     @server = server
     harness = this
     ready = new Promise((resolve, reject)
@@ -69,6 +83,54 @@ failedLogin(input)
     context token
     token.auth = true
     throw "ExpectedLoginFailure"
+
+allowPolicy(path, input)
+    context request
+    context token
+    assert request.path == path
+    assert is_object(input)
+    token.policyChecked = true
+    return true
+
+denyPolicy(path, input)
+    context token
+    token.auth = false
+    token.deniedChange = "must-not-persist"
+    return false
+
+rejectPolicy(path, input)
+    global promises
+    return promises.reject("ExpectedAuthFailure")
+
+invalidPolicy(path, input)
+    return 0
+
+asyncPolicy(path, input)
+    global promises
+    context request
+    context token
+    return promises.resolve().then(()
+        capture request, token, path
+        assert request.path == path
+        token.asyncChecked = "yes"
+        return allowedResult()
+    )
+
+allowedResult()
+    return true
+
+class Policy
+    methods
+        check(path, input)
+
+Policy()
+    @path = "/auth/module"
+
+Policy:check(path, input)
+    context token
+    assert path == @path
+    token.moduleChecked = true
+    return true
 
 main(args)
     harness = new Harness()
@@ -129,8 +191,44 @@ checkAuthenticated(harness, token)
     return harness.request("/private", token).then((response)
         capture harness, token
         assert response.status == 200
-        return checkFailure(harness, token)
+        return checkAuthCases(harness, token, 0)
     )
+
+authCases()
+    return [{ path: "/auth/allow", status: 200 }, { path: "/auth/deny", status: 403 }, { path: "/auth/public-deny", status: 403 }, { path: "/auth/reject", status: 500 }, { path: "/auth/invalid", status: 500 }, { path: "/auth/async", status: 200 }, { path: "/auth/module", status: 200 }, { path: "/auth/external", status: 200 }]
+
+checkAuthCases(harness, token, index)
+    cases = authCases()
+    if index == cases.length
+        println("PASS auth callbacks: sync, async, module receiver, imported module, 403 and 500")
+        return checkFailure(harness, token)
+    expected = cases[index]
+    return harness.request(expected.path, token).then((response)
+        capture harness, token, index, expected
+        if response.status != expected.status
+            throw "${expected.path}: expected ${expected.status}, received ${response.status}"
+        renewed = response.headers.get("X-Lango-Token")
+        return verifyAuthCase(harness, token, index, expected, renewed)
+    )
+
+verifyAuthCase(harness, token, index, expected, renewed)
+    return harness.service.verify(renewed).then((claims)
+        capture harness, token, index, expected
+        assertPolicyClaims(claims, expected.path)
+        return checkAuthCases(harness, token, index + 1)
+    )
+
+assertPolicyClaims(claims, path)
+    assert claims.auth
+    assert claims.deniedChange == null
+    if path == "/auth/allow"
+        assert claims.policyChecked
+    if path == "/auth/async"
+        assert claims.asyncChecked == "yes"
+    if path == "/auth/module"
+        assert claims.moduleChecked
+    if path == "/auth/external"
+        assert claims.externalChecked
 
 checkFailure(harness, token)
     return harness.request("/boom", token).then((response)

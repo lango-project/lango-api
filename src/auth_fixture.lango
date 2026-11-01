@@ -1,0 +1,8 @@
+export allow(path, input)
+
+allow(path, input)
+    context token
+    context request
+    assert request.path == path
+    token.externalChecked = true
+    return true

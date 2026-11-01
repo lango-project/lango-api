@@ -1,0 +1,30 @@
+export createAuth(spec)
+export resolveAuth(spec, definitions)
+
+createAuth(spec)
+    if spec == null
+        return null
+    if is_kindof(spec, Function)
+        return { module: null, function: spec }
+    if not is_object(spec)
+        throw "ApiAuthRequiresFunctionOrMap"
+    if is_kindof(spec.function, Function)
+        return { module: spec.module, function: spec.function }
+    if !is_string(spec.function) or spec.function == "" or spec.module == null
+        throw "ApiAuthRequiresModuleAndFunction"
+    if is_string(spec.module)
+        if spec.module == ""
+            throw "ApiAuthRequiresModuleAndFunction"
+      else
+          if !is_object(spec.module) and !is_kindof(spec.module, Function)
+              throw "ApiAuthRequiresModuleAndFunction"
+    return { module: spec.module, function: spec.function }
+
+resolveAuth(spec, definitions)
+    if is_string(spec)
+        if spec == "__proto__" or spec == "constructor" or spec == "prototype"
+            throw "ApiUnknownAuth: ${spec}"
+        if not (spec in definitions)
+            throw "ApiUnknownAuth: ${spec}"
+        return createAuth(definitions[spec])
+    return createAuth(spec)

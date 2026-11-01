@@ -1,4 +1,7 @@
 import js "node:fs" as fs
+import "./authorization"
+    createAuth(spec)
+    resolveAuth(spec, definitions)
 
 export loadRoutes(apiFile)
 export findRoute(routes, requestPath)
@@ -19,12 +22,13 @@ anonymousValue(value)
     throw "ApiAnonymousMustBeBoolean"
 
 endpointFromTag(tag)
-    validateAttributes(tag, ["path", "mod", "func", "anonymous"])
+    validateAttributes(tag, ["path", "mod", "func", "anonymous", "auth"])
     return createEndpoint({
         path: tag.path,
         module: tag.mod,
         function: tag.func,
-        anonymous: tag.anonymous
+        anonymous: tag.anonymous,
+        auth: tag.auth
     })
 
 createEndpoint(options)
@@ -57,7 +61,8 @@ createEndpoint(options)
         func: functionName,
         module: moduleValue,
         handler: handler,
-        anonymous: anonymousValue(options.anonymous)
+        anonymous: anonymousValue(options.anonymous),
+        auth: options.auth
     }
 
 addRoute(routes, endpoint)
@@ -86,7 +91,19 @@ routesFromXml(xml)
         throw "ApiConfigRootMustBeApi"
     validateAttributes(root, [])
     routes = []
-    collectRoutes(root, "", null, routes, false)
+    definitions = {}
+    for root.children() as child
+        if child.tag() == "auth"
+            validateAttributes(child, ["name", "mod", "func"])
+            name = child.name
+            if !is_string(name) or name == "" or name == "__proto__" or name == "constructor" or name == "prototype"
+                throw "ApiAuthRequiresValidName"
+            if name in definitions
+                throw "ApiDuplicateAuthName: ${name}"
+            definitions[name] = createAuth({ module: child.mod, function: child.func })
+    collectRoutes(root, "", null, routes, false, null)
+    for routes as route
+        route.auth = resolveAuth(route.auth, definitions)
     return routes
 
 validateAttributes(tag, allowed)
@@ -96,10 +113,12 @@ validateAttributes(tag, allowed)
             throw "ApiConfigUnknownAttribute: <${tagName}> ${name}"
     return null
 
-collectRoutes(tag, parentPath, parentMod, routes, parentAnonymous)
+collectRoutes(tag, parentPath, parentMod, routes, parentAnonymous, parentAuth)
     for tag.children() as child
+        if tag.tag() == "api" and child.tag() == "auth"
+            continue
         if child.tag() == "group"
-            validateAttributes(child, ["path", "mod", "anonymous"])
+            validateAttributes(child, ["path", "mod", "anonymous", "auth"])
             path = child.path
             mod = child.mod
             if path == null
@@ -109,13 +128,18 @@ collectRoutes(tag, parentPath, parentMod, routes, parentAnonymous)
             anonymous = anonymousValue(child.anonymous)
             if anonymous == null
                 anonymous = parentAnonymous
-            collectRoutes(child, parentPath + path, mod, routes, anonymous)
+            auth = child.auth
+            if auth == null
+                auth = parentAuth
+            collectRoutes(child, parentPath + path, mod, routes, anonymous, auth)
           else
               if child.tag() == "endpoint"
                   endpoint = endpointFromTag(child)
                   endpoint.path = parentPath + endpoint.path
                   if endpoint.anonymous == null
                       endpoint.anonymous = parentAnonymous
+                  if endpoint.auth == null
+                      endpoint.auth = parentAuth
                   if endpoint.mod == null and endpoint.module == null
                       endpoint.mod = parentMod
                   if endpoint.mod == null and endpoint.module == null and endpoint.handler == null
@@ -191,3 +215,13 @@ test "api XML rejects an unknown tag and attribute"
         assert false
     catch error
         assert error == "ApiConfigUnknownAttribute: <endpoint> typo"
+
+test "XML auth definitions resolve across group inheritance and declaration order"
+    routes = routesFromXml("<api><group path=\"/private\" mod=\"app\" auth=\"check\"><endpoint path=\"/first\" func=\"first\" /></group><auth name=\"check\" mod=\"security\" func=\"check\" /></api>")
+    assert routes[0].auth.module == "security"
+    assert routes[0].auth.function == "check"
+    try
+        routesFromXml("<api><endpoint path=\"/private\" mod=\"app\" func=\"run\" auth=\"unknown\" /></api>")
+        assert false
+    catch error
+        assert error == "ApiUnknownAuth: unknown"
