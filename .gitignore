@@ -7,3 +7,4 @@ coverage/
 data/
 logs/
 dist/
+.test-output/

@@ -1,0 +1,116 @@
+import js "node:crypto" as crypto
+import js "jose" as jose
+import "./tokens"
+    class TokenService
+
+global promises = globalThis.Promise
+
+export main(args)
+
+configuration(key)
+    return {
+        issuer: "lango-test"
+        audience: "lango-api-test"
+        activeKeyId: "current"
+        keys: { current: key }
+        ttlSeconds: 900
+    }
+
+main(args)
+    key = crypto/randomBytes(32)
+    options = configuration(key)
+    service = new TokenService(options)
+    verificationKey = new Uint8Array(key)
+    key.fill(0)
+    return service.sign({ auth: true, userId: "ada", iss: "untrusted", aud: "untrusted", exp: 1 }).then((token)
+        capture service, verificationKey
+        return checkRoundTrip(service, token, verificationKey)
+    )
+
+checkRoundTrip(service, token, key)
+    return service.verify(token).then((claims)
+        capture service, token, key
+        assert claims.auth
+        assert claims.userId == "ada"
+        assert claims.iss == "lango-test"
+        assert claims.aud == "lango-api-test"
+        assert claims.exp > claims.iat
+        return checkInvalid(service, token, key)
+    )
+
+checkInvalid(service, token, key)
+    global promises
+    wrongAudience = configuration(key)
+    wrongAudience.audience = "another-service"
+    other = new TokenService(wrongAudience)
+    checks = [expectInvalid(service, "not-a-token"), expectInvalid(service, token + "x"), expectInvalid(other, token), checkExpired(service, key)]
+    return promises.all(checks).then((results)
+        println("PASS token round-trip, reserved claims, key isolation and invalid-token rejection")
+        return checkRotation()
+    )
+
+expectInvalid(service, token)
+    return service.verify(token).then((claims)
+        throw "UnexpectedTokenAcceptance"
+    ).catch((error)
+        assert error == "ApiInvalidToken"
+    )
+
+checkRotation()
+    oldKey = crypto/randomBytes(32)
+    oldOptions = configuration(oldKey)
+    oldOptions.activeKeyId = "previous"
+    oldOptions.keys = { previous: oldKey }
+    old = new TokenService(oldOptions)
+    rotatedOptions = configuration(crypto/randomBytes(32))
+    rotatedOptions.keys.previous = oldKey
+    rotated = new TokenService(rotatedOptions)
+    dropped = new TokenService(configuration(crypto/randomBytes(32)))
+    return old.sign({ auth: false }).then((token)
+        capture rotated, dropped
+        return verifyRotated(rotated, dropped, token)
+    ).then((result)
+        println("PASS retained rotation keys verify and removed key ids are rejected")
+        return checkPolicy()
+    )
+
+checkPolicy()
+    global promises
+    key = crypto/randomBytes(64)
+    service = new TokenService(configuration(key))
+    return promises.all([wrongHeader(service, key, "HS384", "lango+jwt"), wrongHeader(service, key, "HS256", "other+jwt")]).then((results)
+        println("PASS algorithm and token type are pinned")
+    )
+
+wrongHeader(service, key, algorithm, type)
+    signer = new jose/SignJWT({ auth: true })
+    signer.setProtectedHeader({ alg: algorithm, typ: type, kid: "current" })
+    signer.setIssuer("lango-test")
+    signer.setAudience("lango-api-test")
+    signer.setIssuedAt()
+    signer.setExpirationTime("5m")
+    signer.setJti("header-policy-test")
+    return signer.sign(key).then((token)
+        capture service
+        return expectInvalid(service, token)
+    )
+
+verifyRotated(rotated, dropped, token)
+    return rotated.verify(token).then((claims)
+        capture dropped, token
+        assert !claims.auth
+        return expectInvalid(dropped, token)
+    )
+
+checkExpired(service, key)
+    signer = new jose/SignJWT({ auth: true })
+    signer.setProtectedHeader({ alg: "HS256", typ: "lango+jwt", kid: "current" })
+    signer.setIssuer("lango-test")
+    signer.setAudience("lango-api-test")
+    signer.setIssuedAt(1)
+    signer.setExpirationTime(2)
+    signer.setJti("expired-test")
+    return signer.sign(key).then((token)
+        capture service
+        return expectInvalid(service, token)
+    )

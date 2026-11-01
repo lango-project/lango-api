@@ -130,6 +130,26 @@ is ignored. `response.status(code)` and `response.header(name, value)` apply to
 the next send. Promise results are awaited by the host without requiring
 `await` in Lango source.
 
+## Token service foundation
+
+The `./tokens` entry exports `TokenService(options)` for signing and verifying
+JWTs using jose. Options are `issuer`, `audience`, `activeKeyId`, `keys` (a map
+of ids to Uint8Array secrets), and optional `ttlSeconds` (default 900, maximum
+3600). Keys must contain at least 32 bytes and should be generated with a
+cryptographically secure random source and managed persistently outside source
+control. Constructor inputs are copied to prevent later key-buffer mutation.
+
+`sign(claims)` returns a token Promise. `verify(token)` returns a claims Promise
+or rejects with `ApiInvalidToken`. The algorithm is fixed to HS256 and the
+token type to `lango+jwt`; issuer, audience, age, expiry, and key id are checked.
+System claims are written by the service. Retaining an old key id allows
+verification during key rotation. Only trusted services that may also sign
+tokens should receive these shared secrets.
+
+This is a standalone foundation. HTTP route authorization, token refresh,
+browser persistence, and revocation are not yet integrated. The host still
+provides its existing anonymous token context.
+
 ## Application packages
 
 An endpoint `mod` is an npm package specifier, resolved from the application's
