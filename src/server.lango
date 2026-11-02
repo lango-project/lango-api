@@ -242,44 +242,33 @@ start(configuration, routes)
             })
             return
         body = ""
-        appRoot = configuration.appRoot
-        tokenService = configuration.tokenService
         authorization = httpRequest.headers.authorization
-        lifecycle = configuration.lifecycle
         httpRequest.on("data", (chunk)
             capture body
             body = "${body}${chunk}"
         )
         httpRequest.on("end", ()
-            capture appRoot
+            capture configuration
             capture route
-            capture apiResponse
-            capture apiRequest
-            capture requestLog
             capture request
             capture response
             capture token
             capture log
             capture body
-            capture tokenService
             capture authorization
-            capture lifecycle
             input = {
             }
             try
                 if body != ""
                     input = from_json(body)
             catch error
-                requestLog.warn("${apiRequest.method} ${apiRequest.path}: invalid JSON request body")
-                apiResponse.status(400).send({
+                log.warn("${request.method} ${request.path}: invalid JSON request body")
+                response.status(400).send({
                     error: "BadRequest"
-                    requestId: apiRequest.id
+                    requestId: request.id
                 })
                 return
-            try
-                authenticate(tokenService, authorization, route, input, appRoot, lifecycle)
-            catch error
-                sendFailure(apiResponse, requestLog, apiRequest)
+            processRequest(configuration, route, input, authorization)
         )
     )
     server.on("error", (error)
@@ -312,96 +301,98 @@ unauthorized()
     })
     return null
 
-authenticate(service, authorization, route, input, appRoot, lifecycle)
+processRequest(configuration, route, input, authorization)
+    global promises
     context request
     context response
     context log
+    return promises.resolve().then(()
+        capture configuration
+        capture route
+        capture authorization
+        capture request
+        capture response
+        capture log
+        return authenticate(configuration, authorization, route)
+    ).then((claims)
+        capture configuration
+        capture route
+        capture input
+        capture request
+        capture response
+        capture log
+        return dispatchRequest(claims, route, input, configuration)
+    ).catch((error)
+        capture request
+        capture response
+        capture log
+        sendFailure(response, log, request)
+    )
+
+authenticate(configuration, authorization, route)
+    context request
+    context response
+    context log
+    service = configuration.tokenService
     if service == null
-        return authorizeRoute(route, input, appRoot)
+        return anonymousToken()
     raw = null
     try
         raw = bearerToken(authorization)
     catch error
         return unauthorized()
     if route.bootstrap == true
-        return beginSession(service, raw, lifecycle, route, input, appRoot)
+        return beginSession(service, raw, configuration)
     if raw == null
         if route.anonymous != true
             return unauthorized()
-        return beginSession(service, raw, lifecycle, route, input, appRoot)
-    verified = service.verify(raw).catch((error)
+        return beginSession(service, raw, configuration)
+    return service.verify(raw).catch((error)
         capture response
         capture request
         capture log
         return unauthorized()
     )
-    return verified.then((claims)
-        capture route
-        capture input
-        capture appRoot
-        capture request
-        capture response
-        capture log
-        return continueVerified(claims, route, input, appRoot)
-    ).catch((error)
-        capture response
-        capture request
-        capture log
-        sendFailure(response, log, request)
-    )
 
-beginSession(service, raw, lifecycle, route, input, appRoot)
+beginSession(service, raw, configuration)
     context request
     context response
     context log
     return service.startSession(raw).then((session)
-        capture lifecycle
-        capture appRoot
+        capture configuration
         capture request
         capture response
         capture log
-        return initializeSession(session, lifecycle, appRoot)
-    ).then((claims)
+        return initializeSession(session, configuration.lifecycle, configuration.appRoot)
+    )
+
+dispatchRequest(claims, route, input, configuration)
+    context request
+    context response
+    context log
+    if claims == null or response.completed()
+        return null
+    context token = claims
+    response.bindToken(claims)
+    if route.bootstrap == true
+        return response.send({
+            clientId: claims.clientId
+            sessionId: claims.sessionId
+        })
+    if configuration.tokenService != null and route.anonymous != true and claims.auth != true
+        return unauthorized()
+    appRoot = configuration.appRoot
+    return authorizeRoute(route, input, appRoot).then((allowed)
         capture route
         capture input
         capture appRoot
         capture request
         capture response
+        capture token
         capture log
-        return completeSession(claims, route, input, appRoot)
-    ).catch((error)
-        capture request
-        capture response
-        capture log
-        sendFailure(response, log, request)
+        if allowed and !response.completed()
+            return invokeRoute(route, input, appRoot)
     )
-
-completeSession(claims, route, input, appRoot)
-    context response
-    if response.completed()
-        return null
-    if route.bootstrap == true
-        response.bindToken(claims)
-        return response.send({
-            clientId: claims.clientId
-            sessionId: claims.sessionId
-        })
-    return invokeWithToken(claims, route, input, appRoot)
-
-continueVerified(claims, route, input, appRoot)
-    if routeMissing(claims)
-        return null
-    return invokeWithToken(claims, route, input, appRoot)
-
-invokeWithToken(claims, route, input, appRoot)
-    context request
-    context response
-    context log
-    context token = claims
-    response.bindToken(claims)
-    if route.anonymous != true and claims.auth != true
-        return unauthorized()
-    return authorizeRoute(route, input, appRoot)
 
 authorizeRoute(route, input, appRoot)
     global promises
@@ -410,7 +401,7 @@ authorizeRoute(route, input, appRoot)
     context token
     context log
     if route.auth == null
-        return invokeRoute(route, input, appRoot)
+        return promises.resolve(true)
     return promises.resolve().then(()
         capture route
         capture input
@@ -421,19 +412,14 @@ authorizeRoute(route, input, appRoot)
         capture log
         return callAuth(route.auth, input, appRoot)
     ).then((allowed)
-        capture route
-        capture input
-        capture appRoot
         capture request
         capture response
-        capture token
-        capture log
-        return authorizationResult(allowed, route, input, appRoot)
+        return authorizationResult(allowed)
     ).catch((error)
         capture request
         capture response
         capture log
-        authorizationFailed()
+        return authorizationFailed()
     )
 
 authorizationFailed()
@@ -447,7 +433,7 @@ authorizationFailed()
             error: "InternalServerError"
             requestId: request.id
         })
-    return null
+    return false
 
 callAuth(auth, input, appRoot)
     context request
@@ -473,21 +459,21 @@ invokeAuthModule(module, name, input)
     context request
     return module[name](request.path, input)
 
-authorizationResult(allowed, route, input, appRoot)
+authorizationResult(allowed)
     context request
     context response
     if not is_bool(allowed)
         throw "ApiAuthMustReturnBoolean"
     if response.completed()
-        return null
+        return false
     if not allowed
         response.discardTokenChanges()
         response.status(403).send({
             error: "Forbidden"
             requestId: request.id
         })
-        return null
-    return invokeRoute(route, input, appRoot)
+        return false
+    return true
 
 invokeRoute(route, input, appRoot)
     context request

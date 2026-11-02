@@ -14,11 +14,15 @@ export main(args)
 class Harness
     properties
         service
+        tracker
     methods
         begin()
         listening(completion)
         request(path, token)
         stop()
+
+Harness(tokens = true)
+    @tokens = tokens
 
 Harness:begin()
     @service = new TokenService({
@@ -91,11 +95,18 @@ Harness:begin()
             function: "allow"
         }
     })
+    @tracker = new HandlerTracker()
+    for routes as route
+        if route.handler == privateHandler
+            route.handler = trackedHandler(@tracker)
+    service = @service
+    if !@tokens
+        service = null
     server = start({
         host: "127.0.0.1"
         port: 0
         appRoot: "."
-        tokenService: @service
+        tokenService: service
     }, routes)
     @server = server
     harness = this
@@ -142,6 +153,24 @@ Harness:request(path, token)
 Harness:stop()
     @server.close()
     @server.closeAllConnections()
+
+class HandlerTracker
+    properties
+        calls
+    methods
+        invoke(input)
+
+HandlerTracker()
+    @calls = 0
+
+HandlerTracker:invoke(input)
+    @calls++
+    return privateHandler(input)
+
+trackedHandler(tracker)
+    return (input)
+        capture tracker
+        return tracker.invoke(input)
 
 loginHandler(input)
     context token
@@ -223,6 +252,34 @@ main(args)
     ).finally(()
         capture harness
         harness.stop()
+    ).then(()
+        return checkLegacyDispatch()
+    )
+
+checkLegacyDispatch()
+    harness = new Harness(false)
+    return harness.begin().then((ready)
+        capture harness
+        return legacyRequest(harness)
+    ).finally(()
+        capture harness
+        harness.stop()
+    )
+
+legacyRequest(harness)
+    return harness.request("/private", null).then((response)
+        capture harness
+        assert response.status == 200
+        assert harness.tracker.calls == 1
+        return legacyDenial(harness)
+    )
+
+legacyDenial(harness)
+    return harness.request("/auth/deny", null).then((response)
+        capture harness
+        assert response.status == 403
+        assert harness.tracker.calls == 1
+        println("PASS legacy dispatch invokes once and still enforces custom authorization")
     )
 
 checkMissing(harness)
@@ -314,16 +371,26 @@ checkAuthCases(harness, token, index)
         println("PASS auth callbacks: sync, async, module receiver, imported module, 403 and 500")
         return checkFailure(harness, token)
     expected = cases[index]
+    previousCalls = harness.tracker.calls
     return harness.request(expected.path, token).then((response)
         capture harness
         capture token
         capture index
         capture expected
+        capture previousCalls
         if response.status != expected.status
             throw "${expected.path}: expected ${expected.status}, received ${response.status}"
+        assertHandlerCalls(harness, expected, previousCalls)
         renewed = response.headers.get("X-Lango-Token")
         return verifyAuthCase(harness, token, index, expected, renewed)
     )
+
+assertHandlerCalls(harness, expected, previousCalls)
+    calls = previousCalls
+    if expected.status == 200
+        calls++
+    assert harness.tracker.calls == calls
+    return null
 
 verifyAuthCase(harness, token, index, expected, renewed)
     return harness.service.verify(renewed).then((claims)
