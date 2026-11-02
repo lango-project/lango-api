@@ -1,3 +1,5 @@
+import js global Promise
+import js global fetch
 import js "node:crypto" as crypto
 import js "node:path" as path
 import "./server"
@@ -7,7 +9,6 @@ import "./tokens"
 import "./auth_fixture"
     allow(path, input)
 
-global promises = globalThis.Promise
 
 export main(args)
 
@@ -209,17 +210,15 @@ denyPolicy(path, input)
     return false
 
 rejectPolicy(path, input)
-    global promises
-    return promises.reject("ExpectedAuthFailure")
+    return Promise/reject("ExpectedAuthFailure")
 
 invalidPolicy(path, input)
     return 0
 
 asyncPolicy(path, input)
-    global promises
     context request
     context token
-    return promises.resolve().then(()
+    return Promise/resolve().then(()
         capture request
         capture token
         capture path

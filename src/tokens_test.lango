@@ -1,9 +1,10 @@
+import js global Promise
+import js global Uint8Array
 import js "node:crypto" as crypto
 import js "jose" as jose
 import "./tokens"
     class TokenService
 
-global promises = globalThis.Promise
 
 export main(args)
 
@@ -50,12 +51,11 @@ checkRoundTrip(service, token, key)
     )
 
 checkInvalid(service, token, key)
-    global promises
     wrongAudience = configuration(key)
     wrongAudience.audience = "another-service"
     other = new TokenService(wrongAudience)
     checks = [expectInvalid(service, "not-a-token"), expectInvalid(service, "${token}x"), expectInvalid(other, token), checkExpired(service, key)]
-    return promises.all(checks).then((results)
+    return Promise/all(checks).then((results)
         println("PASS token round-trip, reserved claims, key isolation and invalid-token rejection")
         return checkRotation()
     )
@@ -91,10 +91,9 @@ checkRotation()
     )
 
 checkPolicy()
-    global promises
     key = crypto/randomBytes(64)
     service = new TokenService(configuration(key))
-    return promises.all([wrongHeader(service, key, "HS384", "lango+jwt"), wrongHeader(service, key, "HS256", "other+jwt")]).then((results)
+    return Promise/all([wrongHeader(service, key, "HS384", "lango+jwt"), wrongHeader(service, key, "HS256", "other+jwt")]).then((results)
         println("PASS algorithm and token type are pinned")
         return checkExpiredIdentity()
     )

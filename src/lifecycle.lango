@@ -1,7 +1,8 @@
+import js global Promise
+import js global Date
 import "./package_modules"
     resolveModule(appRoot, moduleName)
 
-global promises = globalThis.Promise
 
 export createLifecycle(spec)
 export addLifecycle(handlers, options)
@@ -88,14 +89,13 @@ lifecycleTargets(handlers)
     return targets
 
 initializeSession(session, handlers, appRoot)
-    global promises
     context request
     context response
     context log
     claims = session.claims
     context token = claims
     metadata = sessionMetadata(claims)
-    return promises.resolve().then(()
+    return Promise/resolve().then(()
         capture session
         capture handlers
         capture appRoot

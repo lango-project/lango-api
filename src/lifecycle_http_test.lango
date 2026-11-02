@@ -1,3 +1,5 @@
+import js global Promise
+import js global fetch
 import js "node:crypto" as crypto
 import js "node:path" as path
 import js "node:fs" as fs
@@ -10,7 +12,6 @@ import "./tokens"
 import "./lifecycle_fixture"
     alias importedRegistration = registered(input)
 
-global promises = globalThis.Promise
 
 export main(args)
 
@@ -155,7 +156,6 @@ Hooks()
     @calls = 0
 
 Hooks:started(input)
-    global promises
     context request
     context token
     context log
@@ -171,7 +171,7 @@ Hooks:started(input)
     if mode == "start-fail"
         token.auth = true
         throw "ExpectedStartFailure"
-    return promises.resolve().then(()
+    return Promise/resolve().then(()
         capture token
         capture request
         capture mode

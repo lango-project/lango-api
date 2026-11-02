@@ -1,8 +1,10 @@
+import js global Promise
+import js global TextDecoder
+import js global Uint8Array
 import js "node:crypto" as crypto
 import js "node:util" as util
 import js "jose" as jose
 
-global promises = globalThis.Promise
 
 export class TokenService
     methods
@@ -73,9 +75,8 @@ TokenService:sign(claims)
     return signer.sign(@keys[@activeKeyId])
 
 TokenService:verify(token)
-    global promises
     service = this
-    return promises.resolve().then(()
+    return Promise/resolve().then(()
         capture service
         capture token
         return service.verifySigned(token)
@@ -112,9 +113,8 @@ TokenService:restart(token)
     )
 
 TokenService:startSession(token)
-    global promises
     service = this
-    return promises.resolve().then(()
+    return Promise/resolve().then(()
         capture service
         capture token
         return recoverIdentity(service, token)

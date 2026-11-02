@@ -1,3 +1,4 @@
+import js global Promise
 import js "node:crypto" as crypto
 import js "node:http" as http
 import js "node:util" as util
@@ -13,7 +14,6 @@ import "./lifecycle"
     createLifecycle(spec)
     initializeSession(session, handlers, appRoot)
 
-global promises = globalThis.Promise
 
 export start(configuration, routes)
 
@@ -302,11 +302,10 @@ unauthorized()
     return null
 
 processRequest(configuration, route, input, authorization)
-    global promises
     context request
     context response
     context log
-    return promises.resolve().then(()
+    return Promise/resolve().then(()
         capture configuration
         capture route
         capture authorization
@@ -395,14 +394,13 @@ dispatchRequest(claims, route, input, configuration)
     )
 
 authorizeRoute(route, input, appRoot)
-    global promises
     context request
     context response
     context token
     context log
     if route.auth == null
-        return promises.resolve(true)
-    return promises.resolve().then(()
+        return Promise/resolve(true)
+    return Promise/resolve().then(()
         capture route
         capture input
         capture appRoot
