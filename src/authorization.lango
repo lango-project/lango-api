@@ -5,11 +5,17 @@ createAuth(spec)
     if spec == null
         return null
     if is_kindof(spec, Function)
-        return { module: null, function: spec }
+        return {
+            module: null
+            function: spec
+        }
     if not is_object(spec)
         throw "ApiAuthRequiresFunctionOrMap"
     if is_kindof(spec.function, Function)
-        return { module: spec.module, function: spec.function }
+        return {
+            module: spec.module
+            function: spec.function
+        }
     if !is_string(spec.function) or spec.function == "" or spec.module == null
         throw "ApiAuthRequiresModuleAndFunction"
     if is_string(spec.module)
@@ -18,7 +24,10 @@ createAuth(spec)
       else
           if !is_object(spec.module) and !is_kindof(spec.module, Function)
               throw "ApiAuthRequiresModuleAndFunction"
-    return { module: spec.module, function: spec.function }
+    return {
+        module: spec.module
+        function: spec.function
+    }
 
 resolveAuth(spec, definitions)
     if is_string(spec)

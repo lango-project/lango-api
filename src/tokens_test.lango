@@ -12,7 +12,9 @@ configuration(key)
         issuer: "lango-test"
         audience: "lango-api-test"
         activeKeyId: "current"
-        keys: { current: key }
+        keys: {
+            current: key
+        }
         ttlSeconds: 900
     }
 
@@ -22,14 +24,23 @@ main(args)
     service = new TokenService(options)
     verificationKey = new Uint8Array(key)
     key.fill(0)
-    return service.sign({ auth: true, userId: "ada", iss: "untrusted", aud: "untrusted", exp: 1 }).then((token)
-        capture service, verificationKey
+    return service.sign({
+        auth: true
+        userId: "ada"
+        iss: "untrusted"
+        aud: "untrusted"
+        exp: 1
+    }).then((token)
+        capture service
+        capture verificationKey
         return checkRoundTrip(service, token, verificationKey)
     )
 
 checkRoundTrip(service, token, key)
     return service.verify(token).then((claims)
-        capture service, token, key
+        capture service
+        capture token
+        capture key
         assert claims.auth
         assert claims.userId == "ada"
         assert claims.iss == "lango-test"
@@ -60,14 +71,19 @@ checkRotation()
     oldKey = crypto/randomBytes(32)
     oldOptions = configuration(oldKey)
     oldOptions.activeKeyId = "previous"
-    oldOptions.keys = { previous: oldKey }
+    oldOptions.keys = {
+        previous: oldKey
+    }
     old = new TokenService(oldOptions)
     rotatedOptions = configuration(crypto/randomBytes(32))
     rotatedOptions.keys.previous = oldKey
     rotated = new TokenService(rotatedOptions)
     dropped = new TokenService(configuration(crypto/randomBytes(32)))
-    return old.sign({ auth: false }).then((token)
-        capture rotated, dropped
+    return old.sign({
+        auth: false
+    }).then((token)
+        capture rotated
+        capture dropped
         return verifyRotated(rotated, dropped, token)
     ).then((result)
         println("PASS retained rotation keys verify and removed key ids are rejected")
@@ -86,8 +102,16 @@ checkPolicy()
 checkExpiredIdentity()
     key = crypto/randomBytes(32)
     service = new TokenService(configuration(key))
-    signer = new jose/SignJWT({ auth: true, clientId: "stable-client", privateForm: "must-not-survive" })
-    signer.setProtectedHeader({ alg: "HS256", typ: "lango+jwt", kid: "current" })
+    signer = new jose/SignJWT({
+        auth: true
+        clientId: "stable-client"
+        privateForm: "must-not-survive"
+    })
+    signer.setProtectedHeader({
+        alg: "HS256"
+        typ: "lango+jwt"
+        kid: "current"
+    })
     signer.setIssuer("lango-test")
     signer.setAudience("lango-api-test")
     signer.setIssuedAt(1)
@@ -100,7 +124,8 @@ checkExpiredIdentity()
 
 restartExpired(service, token)
     return service.restart(token).then((claims)
-        capture service, token
+        capture service
+        capture token
         assert claims.clientId == "stable-client"
         assert !claims.auth
         assertFormCleared(claims)
@@ -121,8 +146,14 @@ assertFormCleared(claims)
     return null
 
 wrongHeader(service, key, algorithm, type)
-    signer = new jose/SignJWT({ auth: true })
-    signer.setProtectedHeader({ alg: algorithm, typ: type, kid: "current" })
+    signer = new jose/SignJWT({
+        auth: true
+    })
+    signer.setProtectedHeader({
+        alg: algorithm
+        typ: type
+        kid: "current"
+    })
     signer.setIssuer("lango-test")
     signer.setAudience("lango-api-test")
     signer.setIssuedAt()
@@ -135,14 +166,21 @@ wrongHeader(service, key, algorithm, type)
 
 verifyRotated(rotated, dropped, token)
     return rotated.verify(token).then((claims)
-        capture dropped, token
+        capture dropped
+        capture token
         assert !claims.auth
         return expectInvalid(dropped, token)
     )
 
 checkExpired(service, key)
-    signer = new jose/SignJWT({ auth: true })
-    signer.setProtectedHeader({ alg: "HS256", typ: "lango+jwt", kid: "current" })
+    signer = new jose/SignJWT({
+        auth: true
+    })
+    signer.setProtectedHeader({
+        alg: "HS256"
+        typ: "lango+jwt"
+        kid: "current"
+    })
     signer.setIssuer("lango-test")
     signer.setAudience("lango-api-test")
     signer.setIssuedAt(1)

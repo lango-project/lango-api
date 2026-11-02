@@ -21,29 +21,99 @@ class Harness
         stop()
 
 Harness:begin()
-    @service = new TokenService({ issuer: "http-test", audience: "http-test", activeKeyId: "test", keys: { test: crypto/randomBytes(32) } })
-    routes = [{ path: "/private", handler: privateHandler }, { path: "/login", handler: loginHandler, anonymous: true }, { path: "/boom", handler: brokenHandler }, { path: "/failed-login", handler: failedLogin, anonymous: true }]
-    routes.add({ path: "/auth/allow", handler: privateHandler, auth: allowPolicy })
-    routes.add({ path: "/auth/deny", handler: privateHandler, auth: denyPolicy })
-    routes.add({ path: "/auth/public-deny", handler: privateHandler, anonymous: true, auth: denyPolicy })
-    routes.add({ path: "/auth/reject", handler: privateHandler, auth: rejectPolicy })
-    routes.add({ path: "/auth/invalid", handler: privateHandler, auth: invalidPolicy })
-    routes.add({ path: "/auth/async", handler: privateHandler, auth: asyncPolicy })
-    routes.add({ path: "/auth/module", handler: privateHandler, auth: { module: new Policy(), function: "check" } })
-    routes.add({ path: "/auth/external", handler: privateHandler, auth: { module: path.resolve(".test-output/auth_fixture.mjs"), function: "allow" } })
-    server = start({ host: "127.0.0.1", port: 0, appRoot: ".", tokenService: @service }, routes)
+    @service = new TokenService({
+        issuer: "http-test"
+        audience: "http-test"
+        activeKeyId: "test"
+        keys: {
+            test: crypto/randomBytes(32)
+        }
+    })
+    routes = [{
+        path: "/private"
+        handler: privateHandler
+    }, {
+        path: "/login"
+        handler: loginHandler
+        anonymous: true
+    }, {
+        path: "/boom"
+        handler: brokenHandler
+    }, {
+        path: "/failed-login"
+        handler: failedLogin
+        anonymous: true
+    }]
+    routes.add({
+        path: "/auth/allow"
+        handler: privateHandler
+        auth: allowPolicy
+    })
+    routes.add({
+        path: "/auth/deny"
+        handler: privateHandler
+        auth: denyPolicy
+    })
+    routes.add({
+        path: "/auth/public-deny"
+        handler: privateHandler
+        anonymous: true
+        auth: denyPolicy
+    })
+    routes.add({
+        path: "/auth/reject"
+        handler: privateHandler
+        auth: rejectPolicy
+    })
+    routes.add({
+        path: "/auth/invalid"
+        handler: privateHandler
+        auth: invalidPolicy
+    })
+    routes.add({
+        path: "/auth/async"
+        handler: privateHandler
+        auth: asyncPolicy
+    })
+    routes.add({
+        path: "/auth/module"
+        handler: privateHandler
+        auth: {
+            module: new Policy()
+            function: "check"
+        }
+    })
+    routes.add({
+        path: "/auth/external"
+        handler: privateHandler
+        auth: {
+            module: path.resolve(".test-output/auth_fixture.mjs")
+            function: "allow"
+        }
+    })
+    server = start({
+        host: "127.0.0.1"
+        port: 0
+        appRoot: "."
+        tokenService: @service
+    }, routes)
     @server = server
     harness = this
     ready = new Promise((resolve, reject)
-        capture server, harness
+        capture server
+        capture harness
         register(server, harness, resolve, reject)
     )
     return ready
 
 register(server, harness, resolve, reject)
-    completion = { resolve: resolve, reject: reject }
+    completion = {
+        resolve: resolve
+        reject: reject
+    }
     server.once("listening", ()
-        capture harness, completion
+        capture harness
+        capture completion
         harness.listening(completion)
     )
     server.once("error", (error)
@@ -57,11 +127,17 @@ Harness:listening(completion)
     completion.resolve(this)
 
 Harness:request(path, token)
-    headers = { "Content-Type": "application/json" }
+    headers = {
+        "Content-Type": "application/json"
+    }
     if token != null
         headers.Authorization = "Bearer ${token}"
     url = @url
-    return fetch("${url}${path}", { method: "POST", headers: headers, body: "{}" })
+    return fetch("${url}${path}", {
+        method: "POST"
+        headers: headers
+        body: "{}"
+    })
 
 Harness:stop()
     @server.close()
@@ -70,11 +146,16 @@ Harness:stop()
 loginHandler(input)
     context token
     token.auth = true
-    return { ok: true }
+    return {
+        ok: true
+    }
 
 privateHandler(input)
     context token
-    return { auth: token.auth, clientId: token.clientId }
+    return {
+        auth: token.auth
+        clientId: token.clientId
+    }
 
 brokenHandler(input)
     throw "ExpectedHandlerFailure"
@@ -110,7 +191,9 @@ asyncPolicy(path, input)
     context request
     context token
     return promises.resolve().then(()
-        capture request, token, path
+        capture request
+        capture token
+        capture path
         assert request.path == path
         token.asyncChecked = "yes"
         return allowedResult()
@@ -159,14 +242,16 @@ checkStart(harness)
 
 checkAnonymous(harness, token)
     return harness.request("/private", token).then((response)
-        capture harness, token
+        capture harness
+        capture token
         assert response.status == 401
         return checkFailedLogin(harness, token)
     )
 
 checkFailedLogin(harness, token)
     return harness.request("/failed-login", token).then((response)
-        capture harness, token
+        capture harness
+        capture token
         assert response.status == 500
         renewed = response.headers.get("X-Lango-Token")
         return failedLoginClaims(harness, token, renewed)
@@ -174,7 +259,8 @@ checkFailedLogin(harness, token)
 
 failedLoginClaims(harness, token, renewed)
     return harness.service.verify(renewed).then((claims)
-        capture harness, token
+        capture harness
+        capture token
         assert !claims.auth
         return checkLogin(harness, token)
     )
@@ -189,13 +275,38 @@ checkLogin(harness, token)
 
 checkAuthenticated(harness, token)
     return harness.request("/private", token).then((response)
-        capture harness, token
+        capture harness
+        capture token
         assert response.status == 200
         return checkAuthCases(harness, token, 0)
     )
 
 authCases()
-    return [{ path: "/auth/allow", status: 200 }, { path: "/auth/deny", status: 403 }, { path: "/auth/public-deny", status: 403 }, { path: "/auth/reject", status: 500 }, { path: "/auth/invalid", status: 500 }, { path: "/auth/async", status: 200 }, { path: "/auth/module", status: 200 }, { path: "/auth/external", status: 200 }]
+    return [{
+        path: "/auth/allow"
+        status: 200
+    }, {
+        path: "/auth/deny"
+        status: 403
+    }, {
+        path: "/auth/public-deny"
+        status: 403
+    }, {
+        path: "/auth/reject"
+        status: 500
+    }, {
+        path: "/auth/invalid"
+        status: 500
+    }, {
+        path: "/auth/async"
+        status: 200
+    }, {
+        path: "/auth/module"
+        status: 200
+    }, {
+        path: "/auth/external"
+        status: 200
+    }]
 
 checkAuthCases(harness, token, index)
     cases = authCases()
@@ -204,7 +315,10 @@ checkAuthCases(harness, token, index)
         return checkFailure(harness, token)
     expected = cases[index]
     return harness.request(expected.path, token).then((response)
-        capture harness, token, index, expected
+        capture harness
+        capture token
+        capture index
+        capture expected
         if response.status != expected.status
             throw "${expected.path}: expected ${expected.status}, received ${response.status}"
         renewed = response.headers.get("X-Lango-Token")
@@ -213,7 +327,10 @@ checkAuthCases(harness, token, index)
 
 verifyAuthCase(harness, token, index, expected, renewed)
     return harness.service.verify(renewed).then((claims)
-        capture harness, token, index, expected
+        capture harness
+        capture token
+        capture index
+        capture expected
         assertPolicyClaims(claims, expected.path)
         return checkAuthCases(harness, token, index + 1)
     )
@@ -232,27 +349,31 @@ assertPolicyClaims(claims, path)
 
 checkFailure(harness, token)
     return harness.request("/boom", token).then((response)
-        capture harness, token
+        capture harness
+        capture token
         assert response.status == 500
         return checkTampering(harness, token)
     )
 
 checkTampering(harness, token)
     return harness.request("/login", "${token}x").then((response)
-        capture harness, token
+        capture harness
+        capture token
         assert response.status == 401
         return checkRestart(harness, token)
     )
 
 checkRestart(harness, token)
     return harness.service.verify(token).then((previous)
-        capture harness, token
+        capture harness
+        capture token
         return restartWithIdentity(harness, token, previous)
     )
 
 restartWithIdentity(harness, token, previous)
     return harness.request("/_lango/start", token).then((response)
-        capture harness, previous
+        capture harness
+        capture previous
         assert response.status == 200
         restarted = response.headers.get("X-Lango-Token")
         return checkRestartedClaims(harness, previous, restarted)

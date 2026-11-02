@@ -24,53 +24,54 @@ usage()
 
 newOptions(applicationName)
     return {
-        applicationName: applicationName,
-        mode: "development",
-        appRoot: null,
-        dataDir: null,
-        stateDir: null,
-        logDir: null,
-        configFile: null,
-        apiFile: null,
-        host: null,
-        port: null,
-        jwtEnabled: null,
-        jwtIssuer: null,
-        jwtAudience: null,
-        jwtKeys: null,
-        jwtKeyId: null,
+        applicationName: applicationName
+        mode: "development"
+        appRoot: null
+        dataDir: null
+        stateDir: null
+        logDir: null
+        configFile: null
+        apiFile: null
+        host: null
+        port: null
+        jwtEnabled: null
+        jwtIssuer: null
+        jwtAudience: null
+        jwtKeys: null
+        jwtKeyId: null
         jwtTtl: null
     }
 
 setOption(options, option, value)
-    if option == "--app-root"
-        options.appRoot = value
-    if option == "--data-dir"
-        options.dataDir = value
-    if option == "--state-dir"
-        options.stateDir = value
-    if option == "--log-dir"
-        options.logDir = value
-    if option == "--config"
-        options.configFile = value
-    if option == "--api"
-        options.apiFile = value
-    if option == "--host"
-        options.host = value
-    if option == "--port"
-        options.port = value
-    if option == "--jwt-enabled"
-        options.jwtEnabled = value
-    if option == "--jwt-issuer"
-        options.jwtIssuer = value
-    if option == "--jwt-audience"
-        options.jwtAudience = value
-    if option == "--jwt-keys"
-        options.jwtKeys = value
-    if option == "--jwt-key-id"
-        options.jwtKeyId = value
-    if option == "--jwt-ttl"
-        options.jwtTtl = value
+    switch option
+      case "--app-root"
+          options.appRoot = value
+      case "--data-dir"
+          options.dataDir = value
+      case "--state-dir"
+          options.stateDir = value
+      case "--log-dir"
+          options.logDir = value
+      case "--config"
+          options.configFile = value
+      case "--api"
+          options.apiFile = value
+      case "--host"
+          options.host = value
+      case "--port"
+          options.port = value
+      case "--jwt-enabled"
+          options.jwtEnabled = value
+      case "--jwt-issuer"
+          options.jwtIssuer = value
+      case "--jwt-audience"
+          options.jwtAudience = value
+      case "--jwt-keys"
+          options.jwtKeys = value
+      case "--jwt-key-id"
+          options.jwtKeyId = value
+      case "--jwt-ttl"
+          options.jwtTtl = value
     return options
 
 knownOption(option)
@@ -147,7 +148,8 @@ main(args)
         host = new Host(configuration)
         host.routesFromXml(apiFile)
         return host.start().then((server)
-            capture configuration, log
+            capture configuration
+            capture log
             log.info("lango-api listening on ${configuration.host}:${configuration.port}")
             return server
         ).catch((error)
@@ -183,15 +185,25 @@ test "CLI accepts JWT options and rejects missing option values"
         assert error == "ApiOptionRequiresValue: --jwt-keys"
 
 test "CLI gives explicit configuration precedence"
-    paths = { configFile: "/default/conf.xml" }
+    paths = {
+        configFile: "/default/conf.xml"
+    }
     options = newOptions("shop")
     options.configFile = "/cli/conf.xml"
-    configurationFile = configurationFileFor(paths, options, { LANGO_CONFIG: "/environment/conf.xml" })
+    configurationFile = configurationFileFor(paths, options, {
+        LANGO_CONFIG: "/environment/conf.xml"
+    })
     assert configurationFile == "/cli/conf.xml"
 
 test "CLI derives api.xml after app-root overrides"
     options = newOptions("shop")
-    configuration = { appRoot: "/app", apiFile: null }
-    assert apiFileFor(configuration, options, {}) == "/app/deploy/api.xml"
+    configuration = {
+        appRoot: "/app"
+        apiFile: null
+    }
+    assert apiFileFor(configuration, options, {
+    }) == "/app/deploy/api.xml"
     options.apiFile = "/cli/api.xml"
-    assert apiFileFor(configuration, options, { LANGO_API: "/environment/api.xml" }) == "/cli/api.xml"
+    assert apiFileFor(configuration, options, {
+        LANGO_API: "/environment/api.xml"
+    }) == "/cli/api.xml"

@@ -71,7 +71,8 @@ Host:start()
         targets.add(target)
     prepareLinkedPackages(configuration.appRoot, targets)
     return validateRouteModules(configuration.appRoot, targets).then(()
-        capture configuration, routes
+        capture configuration
+        capture routes
         return startServer(configuration, routes)
     )
 
@@ -79,11 +80,16 @@ mergeLifecycle(base, extra)
     handlers = createLifecycle(base)
     for extra as event: handler
         if handler != null
-            addLifecycle(handlers, { event: event, module: handler.module, function: handler.function })
+            addLifecycle(handlers, {
+                event: event
+                module: handler.module
+                function: handler.function
+            })
     return handlers
 
 withXmlLifecycle(configuration, lifecycle)
-    result = {}
+    result = {
+    }
     for configuration as name: value
         result[name] = value
     result.lifecycle = mergeLifecycle(configuration.lifecycle, lifecycle)
@@ -91,7 +97,8 @@ withXmlLifecycle(configuration, lifecycle)
 
 Routes()
     @items = []
-    @auths = {}
+    @auths = {
+    }
 
 Routes:auth(options)
     if not is_object(options)
@@ -172,10 +179,22 @@ RouteGroup:group(options)
 
 test "route builder groups paths and modules"
     routes = new Routes()
-    math = routes.group({ path: "/math", module: "@shop/math" })
-    math.endpoint({ path: "/add", function: "add" })
-    admin = math.group({ path: "/admin", module: "@shop/admin" })
-    admin.endpoint({ path: "/status", function: "status" })
+    math = routes.group({
+        path: "/math"
+        module: "@shop/math"
+    })
+    math.endpoint({
+        path: "/add"
+        function: "add"
+    })
+    admin = math.group({
+        path: "/admin"
+        module: "@shop/admin"
+    })
+    admin.endpoint({
+        path: "/status"
+        function: "status"
+    })
     values = routes.values()
     assert values[0].path == "/math/add"
     assert values[0].mod == "@shop/math"
@@ -186,10 +205,24 @@ test "route builder resolves inherited named auth and direct overrides"
     routes = new Routes()
     guard = allowAuthForTest
     override = denyAuthForTest
-    routes.auth({ name: "guard", function: guard })
-    group = routes.group({ path: "/private", module: "app", auth: "guard" })
-    group.endpoint({ path: "/first", function: "first" })
-    group.endpoint({ path: "/second", function: "second", auth: override })
+    routes.auth({
+        name: "guard"
+        function: guard
+    })
+    group = routes.group({
+        path: "/private"
+        module: "app"
+        auth: "guard"
+    })
+    group.endpoint({
+        path: "/first"
+        function: "first"
+    })
+    group.endpoint({
+        path: "/second"
+        function: "second"
+        auth: override
+    })
     values = routes.values()
     assert values[0].auth.function == guard
     assert values[1].auth.function == override
@@ -201,7 +234,13 @@ denyAuthForTest(path, input)
     return false
 
 test "startup rejects a missing lifecycle module export"
-    handlers = createLifecycle({ start: { module: {}, function: "missing" } })
+    handlers = createLifecycle({
+        start: {
+            module: {
+            }
+            function: "missing"
+        }
+    })
     try
         validateRouteModules("/tmp", lifecycleTargets(handlers))
         assert false
@@ -209,8 +248,12 @@ test "startup rejects a missing lifecycle module export"
         assert error == "ApiHandlerNotExported: lifecycle:start -> missing"
 
 test "XML and code lifecycle registrations merge without silent overrides"
-    base = createLifecycle({ register: allowAuthForTest })
-    extra = createLifecycle({ start: denyAuthForTest })
+    base = createLifecycle({
+        register: allowAuthForTest
+    })
+    extra = createLifecycle({
+        start: denyAuthForTest
+    })
     combined = mergeLifecycle(base, extra)
     assert combined.register.function == allowAuthForTest
     assert combined.start.function == denyAuthForTest

@@ -17,9 +17,9 @@ langoBuild(packageManifest)
     if not is_object(packageManifest.lango)
         return null
     settings = packageManifest.lango
-    if not is_string(settings.source) or not is_string(settings.output)
+    if !is_string(settings.source) or !is_string(settings.output)
         throw "LangoPackageManifestRequiresSourceAndOutput"
-    if not is_object(packageManifest.scripts) or not is_string(packageManifest.scripts.build)
+    if !is_object(packageManifest.scripts) or !is_string(packageManifest.scripts.build)
         throw "LangoLinkedPackageRequiresBuildScript"
     return settings
 
@@ -40,7 +40,7 @@ buildLinkedPackage(appRoot, moduleName)
     if process.platform == "win32"
         npm = "npm.cmd"
     childProcess/execFileSync(npm, ["run", "build"], {
-        cwd: directory,
+        cwd: directory
         stdio: "inherit"
     })
     if not fs.existsSync(path.join(directory, settings.output))
@@ -52,7 +52,7 @@ prepareLinkedPackages(appRoot, routes)
     targets = validationTargets(routes)
     for targets as route
         packageName = linkedPackageName(route.mod)
-        if packageName != null and not prepared.includes(packageName)
+        if packageName != null and !prepared.includes(packageName)
             buildLinkedPackage(appRoot, packageName)
             prepared.add(packageName)
     return null
@@ -86,7 +86,12 @@ validationTargets(routes)
                 if is_string(auth.module)
                     moduleName = auth.module
                     moduleValue = null
-                targets.add({ path: "${route.path} (auth)", mod: moduleName, module: moduleValue, func: auth.function })
+                targets.add({
+                    path: "${route.path} (auth)"
+                    mod: moduleName
+                    module: moduleValue
+                    func: auth.function
+                })
     return targets
 
 moduleExportsFunction(module, name)
@@ -103,7 +108,10 @@ validateRouteModuleAt(appRoot, routes, index)
         return validateRouteModuleAt(appRoot, routes, index + 1)
     moduleFile = resolveModule(appRoot, route.mod)
     return import_module(moduleFile).then((module)
-        capture appRoot, routes, index, route
+        capture appRoot
+        capture routes
+        capture index
+        capture route
         if not moduleExportsFunction(module, route.func)
             throw "ApiHandlerNotExported: ${route.path} -> ${route.mod}.${route.func}"
         return validateRouteModuleAt(appRoot, routes, index + 1)
@@ -111,14 +119,21 @@ validateRouteModuleAt(appRoot, routes, index)
 
 test "Lango package manifests require a source, output and build script"
     settings = langoBuild({
-        lango: { source: "src/index.lango", output: "dist/index.mjs" },
-        scripts: { build: "lango build src/index.lango --out dist/index.mjs" }
+        lango: {
+            source: "src/index.lango"
+            output: "dist/index.mjs"
+        }
+        scripts: {
+            build: "lango build src/index.lango --out dist/index.mjs"
+        }
     })
     assert settings.source == "src/index.lango"
     assert settings.output == "dist/index.mjs"
 
 test "ordinary npm package manifests do not request a Lango build"
-    assert langoBuild({ name: "ordinary-package" }) == null
+    assert langoBuild({
+        name: "ordinary-package"
+    }) == null
 
 test "module resolution uses the application package context"
     assert resolveModule("/tmp/lango-app", "node:fs") == "node:fs"
@@ -135,7 +150,15 @@ test "startup rejects a missing auth module export"
     handler = (input)
         return input
     try
-        validateRouteModules("/tmp", [{ path: "/private", handler: handler, auth: { module: {}, function: "missing" } }])
+        validateRouteModules("/tmp", [{
+            path: "/private"
+            handler: handler
+            auth: {
+                module: {
+                }
+                function: "missing"
+            }
+        }])
         assert false
     catch error
         assert error == "ApiHandlerNotExported: /private (auth) -> missing"

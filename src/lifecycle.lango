@@ -9,7 +9,10 @@ export lifecycleTargets(handlers)
 export initializeSession(session, handlers, appRoot)
 
 createLifecycle(spec)
-    handlers = { register: null, start: null }
+    handlers = {
+        register: null
+        start: null
+    }
     if spec == null
         return handlers
     if not is_object(spec)
@@ -17,11 +20,18 @@ createLifecycle(spec)
     for spec as event: handler
         if handler != null
             if is_kindof(handler, Function)
-                addLifecycle(handlers, { event: event, function: handler })
+                addLifecycle(handlers, {
+                    event: event
+                    function: handler
+                })
               else
                   if not is_object(handler)
                       throw "ApiLifecycleRequiresFunctionOrMap"
-                  addLifecycle(handlers, { event: event, module: handler.module, function: handler.function })
+                  addLifecycle(handlers, {
+                      event: event
+                      module: handler.module
+                      function: handler.function
+                  })
           else
               requireEvent(event)
     return handlers
@@ -41,7 +51,10 @@ addLifecycle(handlers, options)
     handler = options.function
     module = options.module
     if is_kindof(handler, Function)
-        handlers[event] = { module: null, function: handler }
+        handlers[event] = {
+            module: null
+            function: handler
+        }
         return handlers
     if !is_string(handler) or handler == "" or module == null
         throw "ApiLifecycleRequiresModuleAndFunction"
@@ -51,7 +64,10 @@ addLifecycle(handlers, options)
       else
           if !is_object(module) and !is_kindof(module, Function)
               throw "ApiLifecycleRequiresModuleAndFunction"
-    handlers[event] = { module: module, function: handler }
+    handlers[event] = {
+        module: module
+        function: handler
+    }
     return handlers
 
 lifecycleTargets(handlers)
@@ -63,7 +79,12 @@ lifecycleTargets(handlers)
             if is_string(moduleValue)
                 moduleName = moduleValue
                 moduleValue = null
-            targets.add({ path: "lifecycle:${event}", mod: moduleName, module: moduleValue, func: handler.function })
+            targets.add({
+                path: "lifecycle:${event}"
+                mod: moduleName
+                module: moduleValue
+                func: handler.function
+            })
     return targets
 
 initializeSession(session, handlers, appRoot)
@@ -75,16 +96,31 @@ initializeSession(session, handlers, appRoot)
     context token = claims
     metadata = sessionMetadata(claims)
     return promises.resolve().then(()
-        capture session, handlers, appRoot, metadata, request, response, log, token
+        capture session
+        capture handlers
+        capture appRoot
+        capture metadata
+        capture request
+        capture response
+        capture log
+        capture token
         if session.registered
             return callLifecycle(handlers.register, metadata, appRoot)
         return lifecycleNoop(metadata)
     ).then(()
-        capture handlers, appRoot, metadata, request, response, log, token
+        capture handlers
+        capture appRoot
+        capture metadata
+        capture request
+        capture response
+        capture log
+        capture token
         restoreIdentity(token, metadata)
         return callLifecycle(handlers.start, metadata, appRoot)
     ).then(()
-        capture claims, metadata, token
+        capture claims
+        capture metadata
+        capture token
         restoreIdentity(claims, metadata)
         return claims
     )
@@ -121,28 +157,45 @@ callLifecycle(handler, metadata, appRoot)
     if is_string(handler.module)
         moduleFile = resolveModule(appRoot, handler.module)
         return import_module(moduleFile).then((imported)
-            capture handler, input, request, response, log, token
+            capture handler
+            capture input
+            capture request
+            capture response
+            capture log
+            capture token
             return imported[handler.function](input)
         )
     return module[handler.function](input)
 
 test "lifecycle registration rejects unknown and duplicate events"
-    handlers = createLifecycle({})
-    addLifecycle(handlers, { event: "start", function: lifecycleNoop })
+    handlers = createLifecycle({
+    })
+    addLifecycle(handlers, {
+        event: "start"
+        function: lifecycleNoop
+    })
     try
-        addLifecycle(handlers, { event: "start", function: lifecycleNoop })
+        addLifecycle(handlers, {
+            event: "start"
+            function: lifecycleNoop
+        })
         assert false
     catch error
         assert error == "ApiDuplicateLifecycleEvent: start"
     try
-        createLifecycle({ request: lifecycleNoop })
+        createLifecycle({
+            request: lifecycleNoop
+        })
         assert false
     catch error
         assert error == "ApiUnknownLifecycleEvent"
 
 test "lifecycle configuration requires callable handlers"
     try
-        createLifecycle({ start: {} })
+        createLifecycle({
+            start: {
+            }
+        })
         assert false
     catch error
         assert error == "ApiLifecycleRequiresModuleAndFunction"

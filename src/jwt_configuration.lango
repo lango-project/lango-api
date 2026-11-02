@@ -56,7 +56,8 @@ decodeKeys(text)
         throw "ApiJwtKeysFileMustBeJsonMap"
     if not is_object(encoded)
         throw "ApiJwtKeysFileMustBeJsonMap"
-    keys = {}
+    keys = {
+    }
     count = 0
     for encoded as id: value
         if id == "" or id == "__proto__" or id == "constructor" or id == "prototype"
@@ -80,9 +81,18 @@ test "JWT keys load relative to the XML configuration file"
     file = path.join(directory, "keys.json")
     confFile = path.join(directory, "conf.xml")
     try
-        fs.writeFileSync(file, to_json({ current: key.toString("base64") }), { mode: 384 })
+        fs.writeFileSync(file, to_json({
+            current: key.toString("base64")
+        }), {
+            mode: 384
+        })
         fs.writeFileSync(confFile, "<conf><jwt issuer=\"shop\" audience=\"browser\" keysFile=\"keys.json\" activeKeyId=\"current\" /></conf>")
-        configuration = loadConfiguration("shop", confFile, { appRoot: directory, dataDir: directory, stateDir: directory, logDir: directory })
+        configuration = loadConfiguration("shop", confFile, {
+            appRoot: directory
+            dataDir: directory
+            stateDir: directory
+            logDir: directory
+        })
         configureTokenService(configuration)
         service = configuration.tokenService
         assert is_kindof(service, TokenService)
@@ -94,7 +104,12 @@ test "JWT keys load relative to the XML configuration file"
         fs.rmdirSync(directory)
 
 test "JWT disabled configuration does not read a key file"
-    configuration = { jwt: { enabled: false, keysFile: "/missing/keys.json" } }
+    configuration = {
+        jwt: {
+            enabled: false
+            keysFile: "/missing/keys.json"
+        }
+    }
     configureTokenService(configuration)
     assert configuration.tokenService == null
 
@@ -115,7 +130,11 @@ test "JWT configuration rejects missing active keys"
     file = path.join(directory, "keys.json")
     key = crypto/randomBytes(32)
     try
-        fs.writeFileSync(file, to_json({ current: key.toString("base64") }), { mode: 384 })
+        fs.writeFileSync(file, to_json({
+            current: key.toString("base64")
+        }), {
+            mode: 384
+        })
         expectMissingActiveKey(file)
     finally
         fs.unlinkSync(file)
@@ -123,7 +142,12 @@ test "JWT configuration rejects missing active keys"
 
 expectMissingActiveKey(file)
     try
-        loadTokenService({ keysFile: file, issuer: "shop", audience: "browser", activeKeyId: "missing" })
+        loadTokenService({
+            keysFile: file
+            issuer: "shop"
+            audience: "browser"
+            activeKeyId: "missing"
+        })
         assert false
     catch error
         assert error == "ApiTokenActiveKeyNotFound"

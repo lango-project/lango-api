@@ -28,20 +28,26 @@ The package can also be used as a library. `Host` owns the API lifecycle and
 import js "@lango-project/lango-api" as api
 
 host = new api/Host({
-    appRoot: appRoot,
-    host: "127.0.0.1",
+    appRoot: appRoot
+    host: "127.0.0.1"
     port: 3000
 })
 
 routes = new api/Routes()
 routes.endpoint({
-    path: "/health",
-    module: "@shop/health",
+    path: "/health"
+    module: "@shop/health"
     function: "check"
 })
 
-math = routes.group({ path: "/math", module: "@shop/math" })
-math.endpoint({ path: "/add", function: "add" })
+math = routes.group({
+    path: "/math"
+    module: "@shop/math"
+})
+math.endpoint({
+    path: "/add"
+    function: "add"
+})
 
 host.routes(routes)
 host.start()
@@ -61,7 +67,7 @@ available to the application:
 
 ```lango
 routes.endpoint({
-    path: "/local",
+    path: "/local"
     function: localHandler
 })
 ```
@@ -74,8 +80,15 @@ form remains the standard development route form.
 JWT-enabled hosts can initialize application state before issuing a token:
 
 ```lango
-host.on({ event: "register", function: registerClient })
-host.on({ event: "start", module: "@shop/session", function: "startSession" })
+host.on({
+    event: "register"
+    function: registerClient
+})
+host.on({
+    event: "start"
+    module: "@shop/session"
+    function: "startSession"
+})
 
 registerClient(input)
     context token
@@ -229,7 +242,10 @@ createOrder(input)
 
     log.info("Creating an order for ${token.userId}")
     response.status(201).header("Location", "/orders/42")
-    return { id: 42, requestId: request.id }
+    return {
+        id: 42
+        requestId: request.id
+    }
 ```
 
 `request` provides `id`, `method`, `path`, `headers`, and `remoteAddress`.
@@ -295,8 +311,15 @@ routes.auth({
     name: "access"
     function: checkAccess
 })
-private = routes.group({ path: "/private", auth: "access" })
-private.endpoint({ path: "/save", module: "@shop/orders", function: "save" })
+private = routes.group({
+    path: "/private"
+    auth: "access"
+})
+private.endpoint({
+    path: "/save"
+    module: "@shop/orders"
+    function: "save"
+})
 
 checkAccess(path, input)
     context token

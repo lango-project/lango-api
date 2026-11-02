@@ -19,9 +19,9 @@ parsePort(value)
 
 defaultConfiguration(applicationName)
     return {
-        applicationName: applicationName,
-        host: "127.0.0.1",
-        port: 3000,
+        applicationName: applicationName
+        host: "127.0.0.1"
+        port: 3000
         jwt: null
     }
 
@@ -58,7 +58,10 @@ applyXmlConfiguration(configuration, xml)
 
 jwtSettings(configuration)
     if configuration.jwt == null
-        configuration.jwt = { enabled: true, ttlSeconds: 900 }
+        configuration.jwt = {
+            enabled: true
+            ttlSeconds: 900
+        }
     return configuration.jwt
 
 setJwt(configuration, name, value)
@@ -121,7 +124,14 @@ applyEnvironmentConfiguration(configuration, environment)
         configuration.host = environment.LANGO_HOST
     if is_string(environment.LANGO_PORT)
         configuration.port = parsePort(environment.LANGO_PORT)
-    mapping = { LANGO_JWT_ENABLED: "enabled", LANGO_JWT_ISSUER: "issuer", LANGO_JWT_AUDIENCE: "audience", LANGO_JWT_KEYS: "keysFile", LANGO_JWT_KEY_ID: "activeKeyId", LANGO_JWT_TTL: "ttlSeconds" }
+    mapping = {
+        LANGO_JWT_ENABLED: "enabled"
+        LANGO_JWT_ISSUER: "issuer"
+        LANGO_JWT_AUDIENCE: "audience"
+        LANGO_JWT_KEYS: "keysFile"
+        LANGO_JWT_KEY_ID: "activeKeyId"
+        LANGO_JWT_TTL: "ttlSeconds"
+    }
     for mapping as variable: name
         if is_string(environment[variable])
             setJwt(configuration, name, environment[variable])
@@ -142,7 +152,14 @@ applyOptionConfiguration(configuration, options)
         configuration.host = options.host
     if options.port != null
         configuration.port = parsePort(options.port)
-    mapping = { jwtEnabled: "enabled", jwtIssuer: "issuer", jwtAudience: "audience", jwtKeys: "keysFile", jwtKeyId: "activeKeyId", jwtTtl: "ttlSeconds" }
+    mapping = {
+        jwtEnabled: "enabled"
+        jwtIssuer: "issuer"
+        jwtAudience: "audience"
+        jwtKeys: "keysFile"
+        jwtKeyId: "activeKeyId"
+        jwtTtl: "ttlSeconds"
+    }
     for mapping as option: name
         if options[option] != null
             setJwt(configuration, name, options[option])
@@ -167,16 +184,16 @@ test "configuration applies environment then command-line values"
     configuration = defaultConfiguration("shop")
     configuration.appRoot = "/default"
     applyEnvironmentConfiguration(configuration, {
-        LANGO_APP_ROOT: "/environment",
+        LANGO_APP_ROOT: "/environment"
         LANGO_PORT: "3010"
     })
     applyOptionConfiguration(configuration, {
-        appRoot: "/command-line",
-        dataDir: null,
-        stateDir: null,
-        logDir: null,
-        apiFile: null,
-        host: null,
+        appRoot: "/command-line"
+        dataDir: null
+        stateDir: null
+        logDir: null
+        apiFile: null
+        host: null
         port: "3020"
     })
     assert configuration.appRoot == "/command-line"
@@ -192,8 +209,14 @@ test "configuration rejects an invalid port"
 test "JWT settings follow XML environment and CLI precedence"
     configuration = defaultConfiguration("shop")
     applyXmlConfiguration(configuration, "<conf><jwt issuer=\"xml\" audience=\"browser\" keysFile=\"keys.json\" activeKeyId=\"current\" ttlSeconds=\"600\" /></conf>")
-    applyEnvironmentConfiguration(configuration, { LANGO_JWT_ISSUER: "environment", LANGO_JWT_TTL: "1200" })
-    applyOptionConfiguration(configuration, { jwtIssuer: "cli", jwtTtl: "1800" })
+    applyEnvironmentConfiguration(configuration, {
+        LANGO_JWT_ISSUER: "environment"
+        LANGO_JWT_TTL: "1200"
+    })
+    applyOptionConfiguration(configuration, {
+        jwtIssuer: "cli"
+        jwtTtl: "1800"
+    })
     assert configuration.jwt.issuer == "cli"
     assert configuration.jwt.audience == "browser"
     assert configuration.jwt.ttlSeconds == 1800
@@ -215,6 +238,10 @@ test "JWT configuration rejects misspelled attributes and duplicate sections"
 test "JWT explicit disable can override lower settings"
     configuration = defaultConfiguration("shop")
     applyXmlConfiguration(configuration, "<conf><jwt issuer=\"xml\" /></conf>")
-    applyEnvironmentConfiguration(configuration, { LANGO_JWT_ENABLED: "true" })
-    applyOptionConfiguration(configuration, { jwtEnabled: "false" })
+    applyEnvironmentConfiguration(configuration, {
+        LANGO_JWT_ENABLED: "true"
+    })
+    applyOptionConfiguration(configuration, {
+        jwtEnabled: "false"
+    })
     assert !configuration.jwt.enabled

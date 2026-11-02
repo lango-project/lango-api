@@ -28,11 +28,27 @@ Harness(external = false)
     @external = external
 
 Harness:begin()
-    @service = new TokenService({ issuer: "lifecycle-test", audience: "lifecycle-test", activeKeyId: "test", keys: { test: crypto/randomBytes(32) } })
+    @service = new TokenService({
+        issuer: "lifecycle-test"
+        audience: "lifecycle-test"
+        activeKeyId: "test"
+        keys: {
+            test: crypto/randomBytes(32)
+        }
+    })
     @hooks = new Hooks()
     routes = new Routes()
-    routes.endpoint({ path: "/open", function: openHandler, anonymous: true })
-    host = new Host({ host: "127.0.0.1", port: 0, appRoot: ".", tokenService: @service })
+    routes.endpoint({
+        path: "/open"
+        function: openHandler
+        anonymous: true
+    })
+    host = new Host({
+        host: "127.0.0.1"
+        port: 0
+        appRoot: "."
+        tokenService: @service
+    })
     if @external
         @directory = fs.mkdtempSync(path.join(os.tmpdir(), "lango-lifecycle-xml-"))
         file = path.join(@directory, "api.xml")
@@ -41,8 +57,15 @@ Harness:begin()
         host.routesFromXml(file)
         host.routesFromXml(file)
       else
-          host.on({ event: "register", function: registered })
-          host.on({ event: "start", module: @hooks, function: "started" })
+          host.on({
+              event: "register"
+              function: registered
+          })
+          host.on({
+              event: "start"
+              module: @hooks
+              function: "started"
+          })
           host.routes(routes)
     harness = this
     return host.start().then((server)
@@ -53,15 +76,20 @@ Harness:begin()
 harnessReady(harness, server)
     harness.server = server
     ready = new Promise((resolve, reject)
-        capture harness, server
+        capture harness
+        capture server
         registerListening(harness, server, resolve, reject)
     )
     return ready
 
 registerListening(harness, server, resolve, reject)
-    completion = { resolve: resolve, reject: reject }
+    completion = {
+        resolve: resolve
+        reject: reject
+    }
     server.once("listening", ()
-        capture harness, completion
+        capture harness
+        capture completion
         harness.listening(completion)
     )
     server.once("error", (error)
@@ -75,11 +103,19 @@ Harness:listening(completion)
     completion.resolve(this)
 
 Harness:request(path, token, mode = "normal")
-    headers = { "Content-Type": "application/json", "User-Agent": "lifecycle-test", "X-Lifecycle-Test": mode }
+    headers = {
+        "Content-Type": "application/json"
+        "User-Agent": "lifecycle-test"
+        "X-Lifecycle-Test": mode
+    }
     if token != null
         headers.Authorization = "Bearer ${token}"
     url = @url
-    return fetch("${url}${path}", { method: "POST", headers: headers, body: "{}" })
+    return fetch("${url}${path}", {
+        method: "POST"
+        headers: headers
+        body: "{}"
+    })
 
 Harness:stop()
     if this.server != null
@@ -136,7 +172,10 @@ Hooks:started(input)
         token.auth = true
         throw "ExpectedStartFailure"
     return promises.resolve().then(()
-        capture token, request, mode, log
+        capture token
+        capture request
+        capture mode
+        capture log
         return completeStart(mode)
     )
 
@@ -155,7 +194,9 @@ completeStart(mode)
 openHandler(input)
     context token
     assert token.started
-    return { ok: true }
+    return {
+        ok: true
+    }
 
 main(args)
     harness = new Harness()
@@ -189,7 +230,8 @@ importedRequest(harness)
 
 importedClaims(harness, token)
     return harness.service.verify(token).then((claims)
-        capture harness, token
+        capture harness
+        capture token
         assert claims.importedRegistration
         assert claims.started
         assert claims.registrationBeforeStart
@@ -198,7 +240,8 @@ importedClaims(harness, token)
 
 returningXmlRequest(harness, token, previous)
     return harness.request("/_lango/start", token).then((response)
-        capture harness, previous
+        capture harness
+        capture previous
         assert response.status == 200
         renewed = response.headers.get("X-Lango-Token")
         return returningXmlClaims(harness, renewed, previous)
@@ -224,7 +267,8 @@ checkNew(harness)
 
 newClaims(harness, token)
     return harness.service.verify(token).then((claims)
-        capture harness, token
+        capture harness
+        capture token
         assert to_json(claims.trace) == "[\"register\",\"start\"]"
         assert claims.theme == "dark"
         assert claims.started
@@ -236,7 +280,8 @@ newClaims(harness, token)
 
 checkReturning(harness, token, previous)
     return harness.request("/_lango/start", token).then((response)
-        capture harness, previous
+        capture harness
+        capture previous
         assert response.status == 200
         renewed = response.headers.get("X-Lango-Token")
         return returningClaims(harness, renewed, previous)
@@ -244,7 +289,9 @@ checkReturning(harness, token, previous)
 
 returningClaims(harness, token, previous)
     return harness.service.verify(token).then((claims)
-        capture harness, token, previous
+        capture harness
+        capture token
+        capture previous
         assert to_json(claims.trace) == "[\"start\"]"
         assert claims.clientId == previous.clientId
         assert claims.sessionId != previous.sessionId
@@ -259,7 +306,8 @@ assertThemeCleared(claims)
 
 checkExistingRequest(harness, token)
     return harness.request("/open", token).then((response)
-        capture harness, token
+        capture harness
+        capture token
         assert response.status == 200
         assert harness.hooks.calls == 2
         return checkTampered(harness, token)
@@ -303,7 +351,8 @@ checkFailure(harness, index)
         return null
     mode = modes[index]
     return harness.request("/_lango/start", null, mode).then((response)
-        capture harness, index
+        capture harness
+        capture index
         assertLifecycleFailure(response)
         return checkFailure(harness, index + 1)
     )

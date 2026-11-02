@@ -36,14 +36,16 @@ TokenService(options)
     @audience = options.audience
     @activeKeyId = options.activeKeyId
     @ttl = ttl
-    @keys = {}
+    @keys = {
+    }
     for options.keys as id: key
         @keys[id] = new Uint8Array(key)
 
 TokenService:sign(claims)
     if not is_object(claims)
         throw "ApiTokenClaimsMustBeMap"
-    payload = {}
+    payload = {
+    }
     for claims as name: value
         if name == "__proto__" or name == "constructor" or name == "prototype"
             throw "ApiTokenReservedClaimName"
@@ -57,7 +59,11 @@ TokenService:sign(claims)
     if payload.sessionId == null
         payload.sessionId = crypto/randomUUID()
     signer = new jose/SignJWT(payload)
-    signer.setProtectedHeader({ alg: "HS256", typ: "lango+jwt", kid: @activeKeyId })
+    signer.setProtectedHeader({
+        alg: "HS256"
+        typ: "lango+jwt"
+        kid: @activeKeyId
+    })
     signer.setIssuer(@issuer)
     signer.setAudience(@audience)
     signer.setIssuedAt()
@@ -70,7 +76,8 @@ TokenService:verify(token)
     global promises
     service = this
     return promises.resolve().then(()
-        capture service, token
+        capture service
+        capture token
         return service.verifySigned(token)
     ).then((verified)
         return verifiedPayload(verified)
@@ -108,12 +115,16 @@ TokenService:startSession(token)
     global promises
     service = this
     return promises.resolve().then(()
-        capture service, token
+        capture service
+        capture token
         return recoverIdentity(service, token)
     ).catch((error)
         return newIdentity()
     ).then((identity)
-        return { claims: restartedClaims(identity.clientId), registered: identity.registered }
+        return {
+            claims: restartedClaims(identity.clientId)
+            registered: identity.registered
+        }
     )
 
 TokenService:recoverClient(token)
@@ -124,16 +135,25 @@ TokenService:recoverClient(token)
         throw "ApiInvalidToken"
     issuer = @issuer
     audience = @audience
-    return jose/compactVerify(token, @keys[header.kid], { algorithms: ["HS256"] }).then((verified)
-        capture issuer, audience
+    return jose/compactVerify(token, @keys[header.kid], {
+        algorithms: ["HS256"]
+    }).then((verified)
+        capture issuer
+        capture audience
         return recoveredClientId(verified, issuer, audience)
     )
 
 newIdentity()
-    return { clientId: crypto/randomUUID(), registered: true }
+    return {
+        clientId: crypto/randomUUID()
+        registered: true
+    }
 
 recoveredIdentity(clientId)
-    return { clientId: clientId, registered: false }
+    return {
+        clientId: clientId
+        registered: false
+    }
 
 recoverIdentity(service, token)
     return service.recoverClient(token).then((clientId)
@@ -141,7 +161,11 @@ recoverIdentity(service, token)
     )
 
 restartedClaims(clientId)
-    return { clientId: clientId, sessionId: crypto/randomUUID(), auth: false }
+    return {
+        clientId: clientId
+        sessionId: crypto/randomUUID()
+        auth: false
+    }
 
 recoveredClientId(verified, issuer, audience)
     decoder = new TextDecoder()

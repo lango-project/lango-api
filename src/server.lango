@@ -68,8 +68,8 @@ ApiResponse:header(name, value)
         throw "ApiResponseHeaderNameMustBeAString"
     if @completed
         throw "ApiResponseAlreadySent"
-    httpResponse = @httpResponse
-    httpResponse.setHeader(name, value)
+    res = @httpResponse
+    res.setHeader(name, value)
     return this
 
 ApiResponse:send(value)
@@ -83,7 +83,8 @@ ApiResponse:send(value)
         reply = this
         try
             return @tokenService.sign(@claims).then((token)
-                capture reply, body
+                capture reply
+                capture body
                 reply.write(body, token)
             ).catch((error)
                 capture reply
@@ -94,14 +95,14 @@ ApiResponse:send(value)
     return this.write(body, null)
 
 ApiResponse:write(body, token)
-    httpResponse = @httpResponse
-    if httpResponse.getHeader("Content-Type") == null
-        httpResponse.setHeader("Content-Type", "application/json; charset=utf-8")
-    httpResponse.statusCode = @statusCode
+    res = @httpResponse
+    if res.getHeader("Content-Type") == null
+        res.setHeader("Content-Type", "application/json; charset=utf-8")
+    res.statusCode = @statusCode
     if token != null
-        httpResponse.setHeader("X-Lango-Token", token)
-        httpResponse.setHeader("Cache-Control", "no-store")
-    httpResponse.end(body)
+        res.setHeader("X-Lango-Token", token)
+        res.setHeader("Cache-Control", "no-store")
+    res.end(body)
     return null
 
 ApiResponse:signingFailed()
@@ -109,7 +110,10 @@ ApiResponse:signingFailed()
     log.err("Token signing failed")
     @statusCode = 500
     @httpResponse.setHeader("Content-Type", "application/json; charset=utf-8")
-    body = to_json({ error: "InternalServerError", requestId: @requestId })
+    body = to_json({
+        error: "InternalServerError"
+        requestId: @requestId
+    })
     return this.write(body, null)
 
 ApiResponse:completed()
@@ -145,24 +149,31 @@ RequestLog:err(message)
 
 requestContext(httpRequest, requestId)
     return {
-        id: requestId,
-        method: httpRequest.method,
-        path: httpRequest.url,
-        headers: httpRequest.headers,
+        id: requestId
+        method: httpRequest.method
+        path: httpRequest.url
+        headers: httpRequest.headers
         remoteAddress: httpRequest.socket.remoteAddress
     }
 
 anonymousToken()
-    return { auth: false }
+    return {
+        auth: false
+    }
 
 bootstrapRoute()
-    return { bootstrap: true }
+    return {
+        bootstrap: true
+    }
 
 sendFailure(response, log, request)
     log.err("${request.method} ${request.path}: handler failed")
     if not response.completed()
         response.discardTokenChanges()
-        response.status(500).send({ error: "InternalServerError", requestId: request.id })
+        response.status(500).send({
+            error: "InternalServerError"
+            requestId: request.id
+        })
     return null
 
 sendResult(response, log, request, result)
@@ -174,7 +185,9 @@ sendResult(response, log, request, result)
             if not response.completed()
                 response.send(value)
         ).catch((error)
-            capture response, log, request
+            capture response
+            capture log
+            capture request
             sendFailure(response, log, request)
         )
         return null
@@ -191,7 +204,10 @@ start(configuration, routes)
             if configured.path == "/_lango/start"
                 throw "ApiTokenBootstrapPathIsReserved"
     server = new http/Server((httpRequest, httpResponse)
-        capture configuration, routes, log, crypto
+        capture configuration
+        capture routes
+        capture log
+        capture crypto
         requestId = crypto/randomUUID()
         requestLog = new RequestLog(log, requestId)
         apiRequest = requestContext(httpRequest, requestId)
@@ -203,18 +219,27 @@ start(configuration, routes)
         context token = apiToken
         if httpRequest.method != "POST"
             requestLog.warn("${apiRequest.method} ${apiRequest.path}: method is not allowed")
-            apiResponse.status(405).send({ error: "MethodNotAllowed", requestId: apiRequest.id })
+            apiResponse.status(405).send({
+                error: "MethodNotAllowed"
+                requestId: apiRequest.id
+            })
             return
         if apiRequest.path.indexOf("?") >= 0
             requestLog.warn("${apiRequest.method} ${apiRequest.path}: query parameters are not supported")
-            apiResponse.status(400).send({ error: "QueryNotSupported", requestId: apiRequest.id })
+            apiResponse.status(400).send({
+                error: "QueryNotSupported"
+                requestId: apiRequest.id
+            })
             return
         route = findRoute(routes, apiRequest.path)
-        if apiRequest.path == "/_lango/start" and not routeMissing(configuration.tokenService)
+        if apiRequest.path == "/_lango/start" and !routeMissing(configuration.tokenService)
             route = bootstrapRoute()
         if routeMissing(route)
             requestLog.warn("${apiRequest.method} ${apiRequest.path}: route was not found")
-            apiResponse.status(404).send({ error: "RouteNotFound", requestId: apiRequest.id })
+            apiResponse.status(404).send({
+                error: "RouteNotFound"
+                requestId: apiRequest.id
+            })
             return
         body = ""
         appRoot = configuration.appRoot
@@ -226,14 +251,30 @@ start(configuration, routes)
             body = "${body}${chunk}"
         )
         httpRequest.on("end", ()
-            capture appRoot, route, apiResponse, apiRequest, requestLog, request, response, token, log, body, tokenService, authorization, lifecycle
-            input = {}
+            capture appRoot
+            capture route
+            capture apiResponse
+            capture apiRequest
+            capture requestLog
+            capture request
+            capture response
+            capture token
+            capture log
+            capture body
+            capture tokenService
+            capture authorization
+            capture lifecycle
+            input = {
+            }
             try
                 if body != ""
                     input = from_json(body)
             catch error
                 requestLog.warn("${apiRequest.method} ${apiRequest.path}: invalid JSON request body")
-                apiResponse.status(400).send({ error: "BadRequest", requestId: apiRequest.id })
+                apiResponse.status(400).send({
+                    error: "BadRequest"
+                    requestId: apiRequest.id
+                })
                 return
             try
                 authenticate(tokenService, authorization, route, input, appRoot, lifecycle)
@@ -265,7 +306,10 @@ unauthorized()
     context response
     context request
     response.header("WWW-Authenticate", "Bearer")
-    response.status(401).send({ error: "Unauthorized", requestId: request.id })
+    response.status(401).send({
+        error: "Unauthorized"
+        requestId: request.id
+    })
     return null
 
 authenticate(service, authorization, route, input, appRoot, lifecycle)
@@ -286,14 +330,23 @@ authenticate(service, authorization, route, input, appRoot, lifecycle)
             return unauthorized()
         return beginSession(service, raw, lifecycle, route, input, appRoot)
     verified = service.verify(raw).catch((error)
-        capture response, request, log
+        capture response
+        capture request
+        capture log
         return unauthorized()
     )
     return verified.then((claims)
-        capture route, input, appRoot, request, response, log
+        capture route
+        capture input
+        capture appRoot
+        capture request
+        capture response
+        capture log
         return continueVerified(claims, route, input, appRoot)
     ).catch((error)
-        capture response, request, log
+        capture response
+        capture request
+        capture log
         sendFailure(response, log, request)
     )
 
@@ -302,13 +355,24 @@ beginSession(service, raw, lifecycle, route, input, appRoot)
     context response
     context log
     return service.startSession(raw).then((session)
-        capture lifecycle, appRoot, request, response, log
+        capture lifecycle
+        capture appRoot
+        capture request
+        capture response
+        capture log
         return initializeSession(session, lifecycle, appRoot)
     ).then((claims)
-        capture route, input, appRoot, request, response, log
+        capture route
+        capture input
+        capture appRoot
+        capture request
+        capture response
+        capture log
         return completeSession(claims, route, input, appRoot)
     ).catch((error)
-        capture request, response, log
+        capture request
+        capture response
+        capture log
         sendFailure(response, log, request)
     )
 
@@ -318,7 +382,10 @@ completeSession(claims, route, input, appRoot)
         return null
     if route.bootstrap == true
         response.bindToken(claims)
-        return response.send({ clientId: claims.clientId, sessionId: claims.sessionId })
+        return response.send({
+            clientId: claims.clientId
+            sessionId: claims.sessionId
+        })
     return invokeWithToken(claims, route, input, appRoot)
 
 continueVerified(claims, route, input, appRoot)
@@ -345,13 +412,27 @@ authorizeRoute(route, input, appRoot)
     if route.auth == null
         return invokeRoute(route, input, appRoot)
     return promises.resolve().then(()
-        capture route, input, appRoot, request, response, token, log
+        capture route
+        capture input
+        capture appRoot
+        capture request
+        capture response
+        capture token
+        capture log
         return callAuth(route.auth, input, appRoot)
     ).then((allowed)
-        capture route, input, appRoot, request, response, token, log
+        capture route
+        capture input
+        capture appRoot
+        capture request
+        capture response
+        capture token
+        capture log
         return authorizationResult(allowed, route, input, appRoot)
     ).catch((error)
-        capture request, response, log
+        capture request
+        capture response
+        capture log
         authorizationFailed()
     )
 
@@ -362,7 +443,10 @@ authorizationFailed()
     log.err("${request.method} ${request.path}: authorization failed")
     if not response.completed()
         response.discardTokenChanges()
-        response.status(500).send({ error: "InternalServerError", requestId: request.id })
+        response.status(500).send({
+            error: "InternalServerError"
+            requestId: request.id
+        })
     return null
 
 callAuth(auth, input, appRoot)
@@ -375,7 +459,12 @@ callAuth(auth, input, appRoot)
     if is_string(auth.module)
         moduleFile = resolveModule(appRoot, auth.module)
         return import_module(moduleFile).then((module)
-            capture auth, input, request, response, token, log
+            capture auth
+            capture input
+            capture request
+            capture response
+            capture token
+            capture log
             return invokeAuthModule(module, auth.function, input)
         )
     return invokeAuthModule(auth.module, auth.function, input)
@@ -393,7 +482,10 @@ authorizationResult(allowed, route, input, appRoot)
         return null
     if not allowed
         response.discardTokenChanges()
-        response.status(403).send({ error: "Forbidden", requestId: request.id })
+        response.status(403).send({
+            error: "Forbidden"
+            requestId: request.id
+        })
         return null
     return invokeRoute(route, input, appRoot)
 
@@ -412,11 +504,18 @@ invokeRoute(route, input, appRoot)
             return sendResult(response, log, request, moduleResult)
         moduleFile = resolveModule(appRoot, route.mod)
         return import_module(moduleFile).then((module)
-            capture input, route, request, response, token, log
+            capture input
+            capture route
+            capture request
+            capture response
+            capture token
+            capture log
             importedResult = module[route.func](input)
             return sendResult(response, log, request, importedResult)
         ).catch((error)
-            capture request, response, log
+            capture request
+            capture response
+            capture log
             sendFailure(response, log, request)
         )
     catch error
@@ -424,7 +523,16 @@ invokeRoute(route, input, appRoot)
     return null
 
 test "request context preserves HTTP metadata"
-    httpRequest = { method: "POST", url: "/health", headers: { accept: "application/json" }, socket: { remoteAddress: "127.0.0.1" } }
+    httpRequest = {
+        method: "POST"
+        url: "/health"
+        headers: {
+            accept: "application/json"
+        }
+        socket: {
+            remoteAddress: "127.0.0.1"
+        }
+    }
     request = requestContext(httpRequest, "request-1")
     assert request.id == "request-1"
     assert request.path == "/health"
