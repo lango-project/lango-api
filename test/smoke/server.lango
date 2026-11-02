@@ -11,5 +11,5 @@ main(args)
         port: 39457
         appRoot: "/home/alparsla/src/lango-project/lango-api/test/smoke"
     }
-    routes = loadRoutes(configuration.appRoot + "/deploy/api.xml")
+    routes = loadRoutes("${configuration.appRoot}/deploy/api.xml")
     start(configuration, routes)

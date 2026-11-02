@@ -266,7 +266,7 @@ checkExistingRequest(harness, token)
     )
 
 checkTampered(harness, token)
-    return harness.request("/_lango/start", token + "x").then((response)
+    return harness.request("/_lango/start", "${token}x").then((response)
         capture harness
         assert response.status == 200
         renewed = response.headers.get("X-Lango-Token")

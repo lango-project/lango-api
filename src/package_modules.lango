@@ -64,7 +64,7 @@ linkedPackageName(moduleName)
         return null
     parts = moduleName.split("/")
     if moduleName.startsWith("@") and parts.length >= 2
-        return parts[0] + "/" + parts[1]
+        return "${parts[0]}/${parts[1]}"
     return parts[0]
 
 resolveModule(appRoot, moduleName)

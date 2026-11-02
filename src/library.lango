@@ -138,7 +138,7 @@ RouteGroup(items, path, mod, anonymous, auth)
 
 RouteGroup:endpoint(options)
     endpoint = createEndpoint(options)
-    endpoint.path = @path + endpoint.path
+    endpoint.path = "${@path}${endpoint.path}"
     if endpoint.anonymous == null
         endpoint.anonymous = @anonymous
     if endpoint.auth == null
@@ -168,7 +168,7 @@ RouteGroup:group(options)
     auth = options.auth
     if auth == null
         auth = @auth
-    return new RouteGroup(@items, @path + path, mod, anonymous, auth)
+    return new RouteGroup(@items, "${@path}${path}", mod, anonymous, auth)
 
 test "route builder groups paths and modules"
     routes = new Routes()

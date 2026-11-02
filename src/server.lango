@@ -223,7 +223,7 @@ start(configuration, routes)
         lifecycle = configuration.lifecycle
         httpRequest.on("data", (chunk)
             capture body
-            body = body + chunk.toString()
+            body = "${body}${chunk}"
         )
         httpRequest.on("end", ()
             capture appRoot, route, apiResponse, apiRequest, requestLog, request, response, token, log, body, tokenService, authorization, lifecycle

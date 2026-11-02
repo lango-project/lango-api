@@ -152,11 +152,11 @@ collectRoutes(tag, parentPath, parentMod, routes, parentAnonymous, parentAuth)
             auth = child.auth
             if auth == null
                 auth = parentAuth
-            collectRoutes(child, parentPath + path, mod, routes, anonymous, auth)
+            collectRoutes(child, "${parentPath}${path}", mod, routes, anonymous, auth)
           else
               if child.tag() == "endpoint"
                   endpoint = endpointFromTag(child)
-                  endpoint.path = parentPath + endpoint.path
+                  endpoint.path = "${parentPath}${endpoint.path}"
                   if endpoint.anonymous == null
                       endpoint.anonymous = parentAnonymous
                   if endpoint.auth == null

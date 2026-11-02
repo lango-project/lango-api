@@ -43,7 +43,7 @@ checkInvalid(service, token, key)
     wrongAudience = configuration(key)
     wrongAudience.audience = "another-service"
     other = new TokenService(wrongAudience)
-    checks = [expectInvalid(service, "not-a-token"), expectInvalid(service, token + "x"), expectInvalid(other, token), checkExpired(service, key)]
+    checks = [expectInvalid(service, "not-a-token"), expectInvalid(service, "${token}x"), expectInvalid(other, token), checkExpired(service, key)]
     return promises.all(checks).then((results)
         println("PASS token round-trip, reserved claims, key isolation and invalid-token rejection")
         return checkRotation()

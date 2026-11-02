@@ -238,7 +238,7 @@ checkFailure(harness, token)
     )
 
 checkTampering(harness, token)
-    return harness.request("/login", token + "x").then((response)
+    return harness.request("/login", "${token}x").then((response)
         capture harness, token
         assert response.status == 401
         return checkRestart(harness, token)
