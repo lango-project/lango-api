@@ -439,7 +439,8 @@ configured through the library TokenService constructor.
 A revoked token can still be used at `/_lango/start` to recover only `clientId`;
 it never restores the revoked session or its authentication. Browser clients
 should stop old form sessions and bootstrap a new anonymous session after
-logout. Automatic client logout orchestration is not implemented yet.
+logout. `lango-client` implements this flow through `application.logout()`,
+including form disposal, late-response protection, and fresh sequence counters.
 
 ## Authorization callbacks
 
