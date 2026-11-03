@@ -139,6 +139,8 @@ registered(input)
     token.trace = ["register"]
     token.theme = "dark"
     token.clientId = "must-not-replace-client"
+    token.sessionStartedAt = 0
+    token.sessionExpiresAt = 0
     input.clientId = "must-not-replace-metadata"
     if request.headers["x-lifecycle-test"] == "register-fail"
         token.auth = true
@@ -167,6 +169,8 @@ Hooks:started(input)
         token.trace = []
     token.trace.add("start")
     token.sessionId = "must-not-replace-session"
+    token.sessionStartedAt = 0
+    token.sessionExpiresAt = 0
     mode = request.headers["x-lifecycle-test"]
     if mode == "start-fail"
         token.auth = true

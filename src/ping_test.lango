@@ -41,6 +41,8 @@ Hooks:ping(input)
     token.sessionId = "must-not-change-session"
     token.formId = "must-not-change-form"
     token.seqno = 999
+    token.sessionStartedAt = 0
+    token.sessionExpiresAt = 0
     count = token.pingCount
     if count == null
         count = 0

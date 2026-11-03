@@ -46,6 +46,7 @@ loadTokenService(settings)
         activeKeyId: settings.activeKeyId
         keys: keys
         ttlSeconds: settings.ttlSeconds
+        sessionTtlSeconds: settings.sessionTtlSeconds
     })
 
 decodeKeys(text)

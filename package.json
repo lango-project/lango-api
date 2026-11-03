@@ -30,7 +30,7 @@
   "scripts": {
     "build": "lango build src/cli.lango --out dist/cli.mjs --executable && lango build src/tokens.lango --out dist/tokens.mjs",
     "test": "lango test src/cli.lango --build-dir .test-output/source && npm run test:tokens && npm run test:http && npm run test:ping && npm run test:revocation",
-    "test:tokens": "lango build src/tokens_test.lango --out .test-output/tokens_test.mjs --executable && node .test-output/tokens_test.mjs",
+    "test:tokens": "lango build src/tokens_test.lango --out .test-output/tokens_test.mjs --executable && node .test-output/tokens_test.mjs && lango build src/session_lifetime_test.lango --out .test-output/session_lifetime_test.mjs --executable && node .test-output/session_lifetime_test.mjs",
     "test:http": "lango build src/auth_http_test.lango --out .test-output/auth_http_test.mjs --executable && node .test-output/auth_http_test.mjs && npm run test:lifecycle",
     "test:lifecycle": "lango build src/lifecycle_http_test.lango --out .test-output/lifecycle_http_test.mjs --executable && node .test-output/lifecycle_http_test.mjs && npm run test:audit",
     "test:audit": "lango build src/request_audit_test.lango --out .test-output/request_audit_test.mjs --executable && node .test-output/request_audit_test.mjs",

@@ -4,6 +4,7 @@ import js global Uint8Array
 import js global Date
 import js global Map
 import js global Array
+import js global Math
 import js "node:crypto" as crypto
 import js "node:util" as util
 import js "jose" as jose
@@ -67,10 +68,16 @@ TokenService(options)
         ttl = 900
     if !is_number(ttl) or ttl < 1 or ttl > 3600 or ttl % 1 != 0
         throw "ApiTokenLifetimeMustBeBetween1And3600Seconds"
+    sessionTtl = options.sessionTtlSeconds
+    if sessionTtl == null
+        sessionTtl = 28800
+    if !is_number(sessionTtl) or sessionTtl < 1 or sessionTtl > 2592000 or sessionTtl % 1 != 0
+        throw "ApiTokenSessionLifetimeMustBeBetween1And2592000Seconds"
     @issuer = options.issuer
     @audience = options.audience
     @activeKeyId = options.activeKeyId
     @ttl = ttl
+    @sessionTtl = sessionTtl
     @keys = {
     }
     @revocations = options.revocations
@@ -98,6 +105,13 @@ TokenService:sign(claims)
         payload.clientId = crypto/randomUUID()
     if payload.sessionId == null
         payload.sessionId = crypto/randomUUID()
+    if payload.sessionStartedAt == null and payload.sessionExpiresAt == null
+        stampSession(payload, @sessionTtl)
+    now = Math/floor(Date/now() / 1000)
+    deadline = sessionDeadline(payload, @sessionTtl)
+    expiresAt = now + @ttl
+    if deadline < expiresAt
+        expiresAt = deadline
     signer = new jose/SignJWT(payload)
     signer.setProtectedHeader({
         alg: "HS256"
@@ -106,9 +120,8 @@ TokenService:sign(claims)
     })
     signer.setIssuer(@issuer)
     signer.setAudience(@audience)
-    signer.setIssuedAt()
-    ttl = @ttl
-    signer.setExpirationTime("${ttl}s")
+    signer.setIssuedAt(now)
+    signer.setExpirationTime(expiresAt)
     signer.setJti(crypto/randomUUID())
     service = this
     key = @keys[@activeKeyId]
@@ -130,13 +143,19 @@ checkedToken(service, claims, token)
 
 TokenService:checkSession(claims)
     store = @revocations
+    sessionTtl = @sessionTtl
     return Promise/resolve().then(()
         capture store
         capture claims
+        capture sessionTtl
+        sessionDeadline(claims, sessionTtl)
         return store.isRevoked(claims.sessionId)
     ).then((revoked)
+        capture claims
+        capture sessionTtl
         if !is_bool(revoked) or revoked
             throw "ApiInvalidToken"
+        sessionDeadline(claims, sessionTtl)
         return null
     )
 
@@ -201,6 +220,7 @@ TokenService:restart(token)
 
 TokenService:startSession(token)
     service = this
+    sessionTtl = @sessionTtl
     return Promise/resolve().then(()
         capture service
         capture token
@@ -208,8 +228,9 @@ TokenService:startSession(token)
     ).catch((error)
         return newIdentity()
     ).then((identity)
+        capture sessionTtl
         return {
-            claims: restartedClaims(identity.clientId)
+            claims: restartedClaims(identity.clientId, sessionTtl)
             registered: identity.registered
         }
     )
@@ -247,12 +268,34 @@ recoverIdentity(service, token)
         return recoveredIdentity(clientId)
     )
 
-restartedClaims(clientId)
-    return {
+restartedClaims(clientId, sessionTtl)
+    claims = {
         clientId: clientId
         sessionId: crypto/randomUUID()
         auth: false
     }
+    stampSession(claims, sessionTtl)
+    return claims
+
+stampSession(claims, sessionTtl)
+    claims.sessionStartedAt = Math/floor(Date/now() / 1000)
+    claims.sessionExpiresAt = claims.sessionStartedAt + sessionTtl
+    return null
+
+sessionDeadline(claims, sessionTtl)
+    startedAt = claims.sessionStartedAt
+    expiresAt = claims.sessionExpiresAt
+    now = Date/now() / 1000
+    if !is_number(startedAt) or startedAt < 0 or startedAt % 1 != 0 or startedAt > now + 5
+        throw "ApiInvalidToken"
+    if !is_number(expiresAt) or expiresAt % 1 != 0 or expiresAt <= startedAt
+        throw "ApiInvalidToken"
+    deadline = startedAt + sessionTtl
+    if expiresAt < deadline
+        deadline = expiresAt
+    if now >= deadline
+        throw "ApiInvalidToken"
+    return deadline
 
 recoveredClientId(verified, issuer, audience)
     decoder = new TextDecoder()

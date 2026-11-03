@@ -131,6 +131,8 @@ initializeSession(session, handlers, appRoot)
 restoreIdentity(claims, metadata)
     claims.clientId = metadata.clientId
     claims.sessionId = metadata.sessionId
+    claims.sessionStartedAt = metadata.sessionStartedAt
+    claims.sessionExpiresAt = metadata.sessionExpiresAt
     return null
 
 sessionMetadata(claims)
@@ -144,6 +146,8 @@ sessionMetadata(claims)
         queryString: ""
         clientId: claims.clientId
         sessionId: claims.sessionId
+        sessionStartedAt: claims.sessionStartedAt
+        sessionExpiresAt: claims.sessionExpiresAt
     }
 
 callLifecycle(handler, metadata, appRoot)

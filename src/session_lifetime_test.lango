@@ -1,0 +1,257 @@
+import js global Promise
+import js global Date
+import js global Math
+import js global globalThis as host
+import js "node:crypto" as crypto
+import js "jose" as jose
+import "./tokens"
+    class TokenService
+
+export main(args)
+
+options(key, lifetime = 120)
+    return {
+        issuer: "lifetime-test"
+        audience: "lifetime-test"
+        activeKeyId: "current"
+        keys: {
+            current: key
+        }
+        ttlSeconds: 900
+        sessionTtlSeconds: lifetime
+    }
+
+main(args)
+    checkConfiguration()
+    key = crypto/randomBytes(32)
+    service = new TokenService(options(key))
+    return service.sign({
+        clientId: "stable-client"
+        auth: true
+    }).then((token)
+        capture service
+        capture key
+        return checkFresh(service, key, token)
+    )
+
+checkConfiguration()
+    for [0, -1, 1.5, 2592001, "120"] as lifetime
+        try
+            service = new TokenService(options(crypto/randomBytes(32), lifetime))
+            assert false
+        catch error
+            assert error == "ApiTokenSessionLifetimeMustBeBetween1And2592000Seconds"
+    return null
+
+checkFresh(service, key, token)
+    return service.verify(token).then((claims)
+        capture service
+        capture key
+        assert claims.sessionExpiresAt - claims.sessionStartedAt == 120
+        assert claims.iat == claims.sessionStartedAt
+        assert claims.exp == claims.sessionExpiresAt
+        return renew(service, key, claims)
+    )
+
+renew(service, key, previous)
+    return service.sign(previous).then((token)
+        capture service
+        capture key
+        capture previous
+        return verifyRenewal(service, key, previous, token)
+    )
+
+verifyRenewal(service, key, previous, token)
+    return service.verify(token).then((claims)
+        capture service
+        capture key
+        capture previous
+        capture token
+        assert claims.sessionStartedAt == previous.sessionStartedAt
+        assert claims.sessionExpiresAt == previous.sessionExpiresAt
+        assert claims.exp <= claims.sessionExpiresAt
+        return checkBoundary(service, key, claims, token)
+    )
+
+checkBoundary(service, key, claims, token)
+    original = host.Date.now
+    frozen = ()
+        capture claims
+        return claims.sessionExpiresAt * 1000
+    replaceNow(frozen)
+    return expectInvalid(service, token).then(()
+        capture service
+        capture claims
+        return expectSignRejected(service, claims)
+    ).finally(()
+        capture original
+        replaceNow(original)
+    ).then(()
+        capture key
+        println("PASS absolute deadline is preserved by renewal, caps exp and rejects at the boundary without clock grace")
+        return checkInvalidClaims(key)
+    )
+
+replaceNow(callback)
+    host.Date.now = callback
+
+expectInvalid(service, token)
+    return service.verify(token).then((claims)
+        throw "UnexpectedTokenAcceptance"
+    ).catch((error)
+        assert error == "ApiInvalidToken"
+    )
+
+expectSignRejected(service, claims)
+    ready = Promise/resolve()
+    return ready.then(()
+        capture service
+        capture claims
+        return service.sign(claims)
+    ).then((token)
+        throw "UnexpectedExpiredSessionSigning"
+    ).catch((error)
+        assert error == "ApiInvalidToken"
+    )
+
+checkInvalidClaims(key)
+    service = new TokenService(options(key))
+    now = Math/floor(Date/now() / 1000)
+    cases = [{
+        auth: true
+    }, {
+        auth: true
+        sessionStartedAt: now - 200
+        sessionExpiresAt: now - 1
+    }, {
+        auth: true
+        sessionStartedAt: now - 200
+        sessionExpiresAt: now + 900
+    }, {
+        auth: true
+        sessionStartedAt: now + 60
+        sessionExpiresAt: now + 120
+    }, {
+        auth: true
+        sessionStartedAt: "invalid"
+        sessionExpiresAt: now + 120
+    }, {
+        auth: true
+        sessionStartedAt: now
+    }]
+    return invalidNext(service, key, cases, 0)
+
+invalidNext(service, key, cases, index)
+    if index == cases.length
+        println("PASS legacy, expired, policy-exceeding, future and malformed session claims are rejected")
+        return checkPolicyChange(key)
+    return rawToken(key, cases[index]).then((token)
+        capture service
+        return expectInvalid(service, token)
+    ).then(()
+        capture service
+        capture key
+        capture cases
+        capture index
+        return invalidNext(service, key, cases, index + 1)
+    )
+
+rawToken(key, claims)
+    claims.clientId = "stable-client"
+    claims.sessionId = "old-session"
+    signer = new jose/SignJWT(claims)
+    signer.setProtectedHeader({
+        alg: "HS256"
+        typ: "lango+jwt"
+        kid: "current"
+    })
+    signer.setIssuer("lifetime-test")
+    signer.setAudience("lifetime-test")
+    signer.setIssuedAt()
+    signer.setExpirationTime("15m")
+    signer.setJti(crypto/randomUUID())
+    return signer.sign(key)
+
+checkPolicyChange(key)
+    now = Math/floor(Date/now() / 1000)
+    claims = {
+        auth: true
+        sessionStartedAt: now - 100
+        sessionExpiresAt: now + 100
+    }
+    return rawToken(key, claims).then((token)
+        capture key
+        return tightenedPolicy(key, token)
+    )
+
+tightenedPolicy(key, token)
+    service = new TokenService(options(key, 60))
+    return expectInvalid(service, token).then(()
+        capture service
+        capture token
+        return service.restart(token)
+    ).then((claims)
+        capture key
+        assert claims.clientId == "stable-client"
+        assert claims.sessionId != "old-session"
+        assert !claims.auth
+        assert claims.sessionExpiresAt - claims.sessionStartedAt == 60
+        return checkLengthenedPolicy(key)
+    )
+
+checkLengthenedPolicy(key)
+    now = Math/floor(Date/now() / 1000)
+    service = new TokenService(options(key, 3600))
+    claims = {
+        auth: true
+        sessionStartedAt: now - 60
+        sessionExpiresAt: now + 60
+    }
+    return service.sign(claims).then((token)
+        capture service
+        return service.verify(token)
+    ).then((verified)
+        capture claims
+        capture key
+        assert verified.sessionExpiresAt == claims.sessionExpiresAt
+        assert verified.exp == claims.sessionExpiresAt
+        println("PASS shorter policy applies immediately; longer policy does not extend existing sessions; restart is anonymous")
+        return checkAsyncExpiry(key)
+    )
+
+class ExpiringStore
+    methods
+        isRevoked(sessionId)
+        revoke(sessionId, expiresAt)
+
+ExpiringStore(deadline)
+    @deadline = deadline
+
+ExpiringStore:isRevoked(sessionId)
+    deadline = @deadline
+    frozen = ()
+        capture deadline
+        return deadline * 1000
+    replaceNow(frozen)
+    return Promise/resolve(false)
+
+ExpiringStore:revoke(sessionId, expiresAt)
+    return null
+
+checkAsyncExpiry(key)
+    original = host.Date.now
+    now = Math/floor(Date/now() / 1000)
+    settings = options(key)
+    settings.revocations = new ExpiringStore(now + 60)
+    service = new TokenService(settings)
+    claims = {
+        auth: true
+        sessionStartedAt: now
+        sessionExpiresAt: now + 60
+    }
+    return expectSignRejected(service, claims).finally(()
+        capture original
+        replaceNow(original)
+    ).then(()
+        println("PASS expiry during asynchronous store access cannot produce a renewed token")
+    )

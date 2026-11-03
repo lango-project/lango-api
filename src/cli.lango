@@ -20,7 +20,7 @@ export configurationFileFor(paths, options, environment)
 export apiFileFor(configuration, options, environment)
 
 usage()
-    return "Usage: lango-api <app> [development|server] [--app-root <path>] [--data-dir <path>] [--state-dir <path>] [--log-dir <path>] [--config <file>] [--api <file>] [--host <host>] [--port <port>] [--jwt-enabled true|false] [--jwt-issuer <issuer>] [--jwt-audience <audience>] [--jwt-keys <file>] [--jwt-key-id <id>] [--jwt-ttl <seconds>]"
+    return "Usage: lango-api <app> [development|server] [--app-root <path>] [--data-dir <path>] [--state-dir <path>] [--log-dir <path>] [--config <file>] [--api <file>] [--host <host>] [--port <port>] [--jwt-enabled true|false] [--jwt-issuer <issuer>] [--jwt-audience <audience>] [--jwt-keys <file>] [--jwt-key-id <id>] [--jwt-ttl <seconds>] [--jwt-session-ttl <seconds>]"
 
 newOptions(applicationName)
     return {
@@ -40,6 +40,7 @@ newOptions(applicationName)
         jwtKeys: null
         jwtKeyId: null
         jwtTtl: null
+        jwtSessionTtl: null
     }
 
 setOption(options, option, value)
@@ -72,11 +73,13 @@ setOption(options, option, value)
           options.jwtKeyId = value
       case "--jwt-ttl"
           options.jwtTtl = value
+      case "--jwt-session-ttl"
+          options.jwtSessionTtl = value
     return options
 
 knownOption(option)
     standard = ["--app-root", "--data-dir", "--state-dir", "--log-dir", "--config", "--api", "--host", "--port"]
-    jwt = ["--jwt-enabled", "--jwt-issuer", "--jwt-audience", "--jwt-keys", "--jwt-key-id", "--jwt-ttl"]
+    jwt = ["--jwt-enabled", "--jwt-issuer", "--jwt-audience", "--jwt-keys", "--jwt-key-id", "--jwt-ttl", "--jwt-session-ttl"]
     return standard.includes(option) or jwt.includes(option)
 
 parseArguments(args)
@@ -174,10 +177,11 @@ test "CLI parses its mode and explicit paths"
     assert options.port == "3010"
 
 test "CLI accepts JWT options and rejects missing option values"
-    options = parseArguments(["shop", "--jwt-keys", "keys.json", "--jwt-issuer", "shop", "--jwt-audience", "browser", "--jwt-key-id", "current", "--jwt-ttl", "900"])
+    options = parseArguments(["shop", "--jwt-keys", "keys.json", "--jwt-issuer", "shop", "--jwt-audience", "browser", "--jwt-key-id", "current", "--jwt-ttl", "900", "--jwt-session-ttl", "28800"])
     assert options.jwtKeys == "keys.json"
     assert options.jwtIssuer == "shop"
     assert options.jwtTtl == "900"
+    assert options.jwtSessionTtl == "28800"
     try
         parseArguments(["shop", "--jwt-keys", "--port", "3000"])
         assert false

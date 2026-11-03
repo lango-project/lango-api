@@ -2,6 +2,10 @@ import js global Promise
 import js global fetch
 import js "node:crypto" as crypto
 import js "node:path" as path
+import js "jose" as jose
+import js global Date
+import js global Math
+import js global globalThis as host
 import "./server"
     start(configuration, routes)
 import "./tokens"
@@ -16,22 +20,24 @@ class Harness
     properties
         service
         tracker
+        key
     methods
         begin()
         listening(completion)
-        request(path, token)
+        request(path, token, input = null)
         stop()
 
 Harness(tokens = true)
     @tokens = tokens
 
 Harness:begin()
+    @key = crypto/randomBytes(32)
     @service = new TokenService({
         issuer: "http-test"
         audience: "http-test"
         activeKeyId: "test"
         keys: {
-            test: crypto/randomBytes(32)
+            test: @key
         }
     })
     routes = [{
@@ -48,6 +54,9 @@ Harness:begin()
         path: "/failed-login"
         handler: failedLogin
         anonymous: true
+    }, {
+        path: "/expire"
+        handler: expireHandler
     }]
     routes.add({
         path: "/auth/allow"
@@ -138,7 +147,10 @@ Harness:listening(completion)
     @url = "http://127.0.0.1:${address.port}"
     completion.resolve(this)
 
-Harness:request(path, token)
+Harness:request(path, token, input = null)
+    if input == null
+        input = {
+        }
     headers = {
         "Content-Type": "application/json"
     }
@@ -148,7 +160,7 @@ Harness:request(path, token)
     return fetch("${url}${path}", {
         method: "POST"
         headers: headers
-        body: "{}"
+        body: to_json(input)
     })
 
 Harness:stop()
@@ -176,6 +188,8 @@ trackedHandler(tracker)
 loginHandler(input)
     context token
     token.auth = true
+    token.sessionStartedAt = 0
+    token.sessionExpiresAt = 0
     return {
         ok: true
     }
@@ -195,12 +209,28 @@ failedLogin(input)
     token.auth = true
     throw "ExpectedLoginFailure"
 
+expireHandler(input)
+    context token
+    deadline = token.sessionExpiresAt
+    frozen = ()
+        capture deadline
+        return deadline * 1000
+    replaceNow(frozen)
+    return {
+        ok: true
+    }
+
+replaceNow(callback)
+    host.Date.now = callback
+
 allowPolicy(path, input)
     context request
     context token
     assert request.path == path
     assert is_object(input)
     token.policyChecked = true
+    token.sessionStartedAt = 0
+    token.sessionExpiresAt = 0
     return true
 
 denyPolicy(path, input)
@@ -448,8 +478,79 @@ restartWithIdentity(harness, token, previous)
 checkRestartedClaims(harness, previous, token)
     return harness.service.verify(token).then((claims)
         capture previous
+        capture harness
         assert claims.clientId == previous.clientId
         assert claims.sessionId != previous.sessionId
         assert !claims.auth
         println("PASS HTTP bootstrap, bearer auth, protected routes, renewal, handler errors and restart identity")
+        return checkAbsoluteExpiry(harness)
+    )
+
+checkAbsoluteExpiry(harness)
+    now = Math/floor(Date/now() / 1000)
+    signer = new jose/SignJWT({
+        clientId: "absolute-client"
+        sessionId: "expired-session"
+        auth: true
+        sessionStartedAt: now - 60
+        sessionExpiresAt: now - 1
+    })
+    signer.setProtectedHeader({
+        alg: "HS256"
+        typ: "lango+jwt"
+        kid: "test"
+    })
+    signer.setIssuer("http-test")
+    signer.setAudience("http-test")
+    signer.setIssuedAt()
+    signer.setExpirationTime("15m")
+    signer.setJti("absolute-expiry")
+    return signer.sign(harness.key).then((token)
+        capture harness
+        return expiredRequests(harness, token)
+    )
+
+expiredRequests(harness, token)
+    checks = [harness.request("/private", token), harness.request("/login", token), harness.request("/_lango/ping", null, {
+        forms: [{
+            formId: "profile"
+            token: token
+        }]
+    })]
+    return Promise/all(checks).then((responses)
+        capture harness
+        capture token
+        for responses as response
+            assert response.status == 401
+            assert response.headers.get("X-Lango-Token") == null
+        return harness.request("/_lango/start", token)
+    ).then((response)
+        capture harness
+        assert response.status == 200
+        return harness.service.verify(response.headers.get("X-Lango-Token"))
+    ).then((claims)
+        capture harness
+        assert claims.clientId == "absolute-client"
+        assert claims.sessionId != "expired-session"
+        assert !claims.auth
+        assert claims.sessionExpiresAt - claims.sessionStartedAt == 28800
+        println("PASS absolute expiry rejects private, anonymous and ping requests; bootstrap recovers only client identity")
+        return checkExpiredResponse(harness)
+    )
+
+checkExpiredResponse(harness)
+    original = host.Date.now
+    return harness.service.sign({
+        auth: true
+    }).then((token)
+        capture harness
+        return harness.request("/expire", token)
+    ).then((response)
+        assert response.status == 401
+        assert response.headers.get("X-Lango-Token") == null
+        assert response.headers.get("WWW-Authenticate") == "Bearer"
+        println("PASS expiry during handler execution returns 401 without renewing the expired session")
+    ).finally(()
+        capture original
+        replaceNow(original)
     )

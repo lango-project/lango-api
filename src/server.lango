@@ -31,7 +31,7 @@ class ApiResponse
         bindToken(claims)
         discardTokenChanges()
         write(body, token)
-        signingFailed()
+        signingFailed(error = null)
         receiveInput(input)
         completedSnapshot()
         logout()
@@ -74,6 +74,8 @@ ApiResponse:bindToken(claims)
     @claims = claims
     @clientId = claims.clientId
     @sessionId = claims.sessionId
+    @sessionStartedAt = claims.sessionStartedAt
+    @sessionExpiresAt = claims.sessionExpiresAt
     @originalClaims = from_json(to_json(claims))
     return null
 
@@ -108,6 +110,8 @@ ApiResponse:send(value)
     if @claims != null
         @claims.clientId = @clientId
         @claims.sessionId = @sessionId
+        @claims.sessionStartedAt = @sessionStartedAt
+        @claims.sessionExpiresAt = @sessionExpiresAt
     if @logout != null
         @claims.auth = false
         return @logout.then(()
@@ -126,10 +130,10 @@ ApiResponse:send(value)
                 reply.write(body, token)
             ).catch((error)
                 capture reply
-                reply.signingFailed()
+                reply.signingFailed(error)
             )
         catch error
-            return this.signingFailed()
+            return this.signingFailed(error)
     return this.write(body, null)
 
 ApiResponse:logout()
@@ -163,8 +167,16 @@ ApiResponse:write(body, token)
     res.end(body)
     return null
 
-ApiResponse:signingFailed()
+ApiResponse:signingFailed(error = null)
     context log
+    if error == "ApiInvalidToken"
+        @statusCode = 401
+        @httpResponse.setHeader("WWW-Authenticate", "Bearer")
+        @httpResponse.setHeader("Cache-Control", "no-store")
+        return this.write(to_json({
+            error: "Unauthorized"
+            requestId: @requestId
+        }), null)
     log.err("Token signing failed")
     @statusCode = 500
     @httpResponse.setHeader("Content-Type", "application/json; charset=utf-8")

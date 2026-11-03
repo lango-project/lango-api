@@ -266,7 +266,8 @@ JWT can be enabled from `conf.xml` without constructing a TokenService in code:
 ```xml
 <conf>
   <jwt issuer="shop" audience="shop-browser"
-       keysFile="jwt.keys.json" activeKeyId="current" ttlSeconds="900" />
+       keysFile="jwt.keys.json" activeKeyId="current"
+       ttlSeconds="900" sessionTtlSeconds="28800" />
 </conf>
 ```
 
@@ -294,10 +295,13 @@ with machine-specific secrets outside the source worktree.
 | `--jwt-keys` | `LANGO_JWT_KEYS` | `keysFile` |
 | `--jwt-key-id` | `LANGO_JWT_KEY_ID` | `activeKeyId` |
 | `--jwt-ttl` | `LANGO_JWT_TTL` | `ttlSeconds` |
+| `--jwt-session-ttl` | `LANGO_JWT_SESSION_TTL` | `sessionTtlSeconds` |
 
 The precedence remains CLI > environment > XML > defaults. Any JWT section or
 JWT option enables JWT unless `enabled` is explicitly false. Lifetime defaults
-to 900 seconds; issuer, audience, key file and active id are required when
+to 900 seconds; absolute session lifetime defaults to 28800 seconds (eight
+hours). Session lifetime must be an integer from 1 to 2592000 seconds (30 days).
+Issuer, audience, key file and active id are required when
 enabled. An absent JWT configuration preserves legacy mode.
 
 XML-relative key files resolve from the `conf.xml` directory; CLI/environment
@@ -345,8 +349,9 @@ the next send. Promise results are awaited by the host without requiring
 
 The `./tokens` entry exports `TokenService(options)` for signing and verifying
 JWTs using jose. Options are `issuer`, `audience`, `activeKeyId`, `keys` (a map
-of ids to Uint8Array secrets), and optional `ttlSeconds` (default 900, maximum
-3600). Keys must contain at least 32 bytes and should be generated with a
+of ids to Uint8Array secrets), optional `ttlSeconds` (default 900, maximum
+3600), and optional `sessionTtlSeconds` (default 28800, range 1–2592000).
+Keys must contain at least 32 bytes and should be generated with a
 cryptographically secure random source and managed persistently outside source
 control. Constructor inputs are copied to prevent later key-buffer mutation.
 
@@ -370,8 +375,9 @@ handler are signed into the `X-Lango-Token` response header. Renewals
 also accompany handler error responses when claims were already verified.
 On handler failure, token changes are discarded and the originally verified
 claims are renewed, so a partially failed login cannot grant authentication.
-`clientId` and `sessionId` are fixed for the request and cannot be changed by
-mutating the context. Token-bearing responses use `Cache-Control: no-store`.
+`clientId`, `sessionId`, `sessionStartedAt`, and `sessionExpiresAt` are fixed for
+the request and cannot be changed by mutating the context. Token-bearing
+responses use `Cache-Control: no-store`.
 
 With tokens enabled, `POST /_lango/start` is reserved for bootstrap. It accepts
 the previous bearer token, recovers only clientId after verifying its signature,
@@ -380,6 +386,36 @@ issuer, audience, type and known key id, and generates a new sessionId with
 path; old authentication and form claims are never restored. Invalid previous
 tokens begin a fresh client identity. Normal endpoint verification still checks
 expiry. The client persists the returned token and resets its local counters.
+
+### Absolute session lifetime
+
+Every new session receives `sessionStartedAt` and `sessionExpiresAt`, expressed
+as integer Unix seconds. Bootstrap creates these before lifecycle callbacks;
+the host restores them after register/start, auth, handler, and ping callbacks.
+Login and token renewal preserve the original session lifetime. Creating or
+renewing another form does not start a new lifetime.
+
+Token `exp` is capped at the earlier of its normal TTL and the session deadline.
+Verification and signing also enforce the earlier of the signed deadline and
+`sessionStartedAt + sessionTtlSeconds` under the current configuration. A shorter
+configured policy therefore applies to existing sessions; a longer policy
+does not extend their original signed deadline. The absolute deadline has no
+additional clock-tolerance grace. Signature verification retains its existing
+five-second tolerance for JWT timing checks.
+
+Expired sessions return 401 on ordinary endpoints, including anonymous routes,
+and ping, with no replacement token. If the deadline passes during a handler,
+response signing also returns 401 without renewal; already executed side effects
+are not rolled back. `/_lango/start` may still recover only clientId and create
+a new anonymous session with fresh bounds. It never restores authentication.
+The browser does not automatically bootstrap after a 401; reload to start over
+and authenticate again when needed.
+
+Tokens issued before these session claims were introduced are rejected by
+normal verification. They remain usable only for bootstrap identity recovery.
+Trusted library calls to `sign(claims)` initialize bounds when both are absent;
+renewals must pass the verified bounds. Missing or malformed bounds in a signed
+token cannot silently start another lifetime.
 
 ### Logout and session revocation
 
@@ -415,8 +451,7 @@ claims, never an unverified request body. `verify` checks the revocation store,
 and `sign` checks it before and after asynchronous signing. Requests already
 executing can still have side effects; revocation does not roll them back.
 Setting `token.auth = false` alone continues to issue an anonymous token and
-does not revoke older tokens. Replay protection and absolute session lifetime
-remain separate work.
+does not revoke older tokens. Replay protection remains separate work.
 
 By default, each TokenService owns a `MemorySessionRevocations` store, also
 exported by `./tokens`. Its records expire after the configured token lifetime
@@ -431,7 +466,7 @@ a shared, durable store:
 | `revoke(sessionId, expiresAt)` | Records revocation before resolving; `expiresAt` is Unix time in seconds. Repeated writes must retain the later expiry. |
 
 All instances serving the same tokens must consult the same store, use the same
-token lifetime policy, and observe completed revocations across instances.
+token and session lifetime policies, and observe completed revocations across instances.
 Store errors reject authentication or signing; they never bypass revocation.
 The built-in CLI currently uses the in-memory default; custom stores are
 configured through the library TokenService constructor.

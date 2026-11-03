@@ -119,6 +119,8 @@ renewForm(configuration, form)
     identity = {
         clientId: claims.clientId
         sessionId: claims.sessionId
+        sessionStartedAt: claims.sessionStartedAt
+        sessionExpiresAt: claims.sessionExpiresAt
         formId: claims.formId
         seqno: claims.seqno
     }
@@ -147,6 +149,8 @@ renewForm(configuration, form)
         capture identity
         claims.clientId = identity.clientId
         claims.sessionId = identity.sessionId
+        claims.sessionStartedAt = identity.sessionStartedAt
+        claims.sessionExpiresAt = identity.sessionExpiresAt
         if identity.formId != null
             claims.formId = identity.formId
         if identity.seqno != null
@@ -154,6 +158,8 @@ renewForm(configuration, form)
         validateIdentity(claims, form.formId)
         return configuration.tokenService.sign(claims)
     ).catch((error)
+        if error == "ApiInvalidToken"
+            throw "ApiPingUnauthorized"
         throw "ApiPingFailed"
     )
 

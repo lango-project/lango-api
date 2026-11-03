@@ -61,6 +61,7 @@ jwtSettings(configuration)
         configuration.jwt = {
             enabled: true
             ttlSeconds: 900
+            sessionTtlSeconds: 28800
         }
     return configuration.jwt
 
@@ -71,9 +72,9 @@ setJwt(configuration, name, value)
             throw "ApiJwtEnabledMustBeBoolean"
         jwt.enabled = value == true or value == "true"
       else
-          if name == "ttlSeconds"
+          if name == "ttlSeconds" or name == "sessionTtlSeconds"
               try
-                  jwt.ttlSeconds = to_js_number($(value))
+                  jwt[name] = to_js_number($(value))
               catch error
                   throw "ApiJwtInvalidLifetime"
             else
@@ -83,7 +84,7 @@ setJwt(configuration, name, value)
     return null
 
 applyXmlJwt(configuration, tag)
-    allowed = ["enabled", "issuer", "audience", "activeKeyId", "keysFile", "ttlSeconds"]
+    allowed = ["enabled", "issuer", "audience", "activeKeyId", "keysFile", "ttlSeconds", "sessionTtlSeconds"]
     jwtSettings(configuration)
     for tag.attributes() as name: value
         if not allowed.includes(name)
@@ -131,6 +132,7 @@ applyEnvironmentConfiguration(configuration, environment)
         LANGO_JWT_KEYS: "keysFile"
         LANGO_JWT_KEY_ID: "activeKeyId"
         LANGO_JWT_TTL: "ttlSeconds"
+        LANGO_JWT_SESSION_TTL: "sessionTtlSeconds"
     }
     for mapping as variable: name
         if is_string(environment[variable])
@@ -159,6 +161,7 @@ applyOptionConfiguration(configuration, options)
         jwtKeys: "keysFile"
         jwtKeyId: "activeKeyId"
         jwtTtl: "ttlSeconds"
+        jwtSessionTtl: "sessionTtlSeconds"
     }
     for mapping as option: name
         if options[option] != null
@@ -208,18 +211,21 @@ test "configuration rejects an invalid port"
 
 test "JWT settings follow XML environment and CLI precedence"
     configuration = defaultConfiguration("shop")
-    applyXmlConfiguration(configuration, "<conf><jwt issuer=\"xml\" audience=\"browser\" keysFile=\"keys.json\" activeKeyId=\"current\" ttlSeconds=\"600\" /></conf>")
+    applyXmlConfiguration(configuration, <conf><jwt issuer="xml" audience="browser" keysFile="keys.json" activeKeyId="current" ttlSeconds="600" sessionTtlSeconds="7200" /></conf>)
     applyEnvironmentConfiguration(configuration, {
         LANGO_JWT_ISSUER: "environment"
         LANGO_JWT_TTL: "1200"
+        LANGO_JWT_SESSION_TTL: "14400"
     })
     applyOptionConfiguration(configuration, {
         jwtIssuer: "cli"
         jwtTtl: "1800"
+        jwtSessionTtl: "21600"
     })
     assert configuration.jwt.issuer == "cli"
     assert configuration.jwt.audience == "browser"
     assert configuration.jwt.ttlSeconds == 1800
+    assert configuration.jwt.sessionTtlSeconds == 21600
     assert configuration.jwt.enabled
 
 test "JWT configuration rejects misspelled attributes and duplicate sections"
