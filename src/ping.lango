@@ -186,6 +186,7 @@ class PingResponse
         header(name, value)
         send(value)
         completed()
+        logout()
 
 PingResponse:status(code)
     throw "ApiPingResponseIsManaged"
@@ -198,3 +199,6 @@ PingResponse:send(value)
 
 PingResponse:completed()
     return false
+
+PingResponse:logout()
+    throw "ApiPingResponseIsManaged"

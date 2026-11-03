@@ -114,6 +114,7 @@ class CompletedResponse
         header(name, value)
         send(value)
         completed()
+        logout()
 
 CompletedResponse(status, body)
     @statusCode = status
@@ -130,3 +131,6 @@ CompletedResponse:send(value)
 
 CompletedResponse:completed()
     return true
+
+CompletedResponse:logout()
+    throw "ApiResponseAlreadySent"

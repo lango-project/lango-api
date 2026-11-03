@@ -34,6 +34,7 @@ class ApiResponse
         signingFailed()
         receiveInput(input)
         completedSnapshot()
+        logout()
 
 class RequestLog
     methods
@@ -51,6 +52,7 @@ ApiResponse(httpResponse, tokenService = null, requestId = null, auditEnabled = 
     @requestId = requestId
     @auditEnabled = auditEnabled
     @input = null
+    @logout = null
 
 ApiResponse:receiveInput(input)
     if @auditEnabled
@@ -102,10 +104,21 @@ ApiResponse:send(value)
         throw "ApiResponseAlreadySent"
     body = to_json(value)
     @completed = true
-    if @tokenService != null and @claims != null
+    reply = this
+    if @claims != null
         @claims.clientId = @clientId
         @claims.sessionId = @sessionId
-        reply = this
+    if @logout != null
+        @claims.auth = false
+        return @logout.then(()
+            capture reply
+            capture body
+            reply.write(body, null)
+        ).catch((error)
+            capture reply
+            reply.signingFailed()
+        )
+    if @tokenService != null and @claims != null
         try
             return @tokenService.sign(@claims).then((token)
                 capture reply
@@ -118,6 +131,24 @@ ApiResponse:send(value)
         catch error
             return this.signingFailed()
     return this.write(body, null)
+
+ApiResponse:logout()
+    if @completed
+        throw "ApiResponseAlreadySent"
+    if @tokenService == null or @claims == null
+        throw "ApiTokenSessionRequired"
+    if @logout == null
+        @claims.auth = false
+        @originalClaims.auth = false
+        this.header("Cache-Control", "no-store")
+        pending = @tokenService.revoke({
+            sessionId: @sessionId
+        })
+        @logout = pending
+        pending.catch((error)
+            return null
+        )
+    return @logout
 
 ApiResponse:write(body, token)
     if @auditEnabled
@@ -198,6 +229,12 @@ pingRoute()
         ping: true
     }
 
+logoutRoute()
+    return {
+        logout: true
+        anonymous: true
+    }
+
 sendFailure(response, log, request)
     log.err("${request.method} ${request.path}: handler failed")
     if not response.completed()
@@ -237,6 +274,8 @@ start(configuration, routes)
                 throw "ApiTokenBootstrapPathIsReserved"
             if configured.path == "/_lango/ping"
                 throw "ApiTokenPingPathIsReserved"
+            if configured.path == "/_lango/logout"
+                throw "ApiTokenLogoutPathIsReserved"
     server = new http/Server((httpRequest, httpResponse)
         capture configuration
         capture routes
@@ -272,6 +311,8 @@ start(configuration, routes)
             route = bootstrapRoute()
         if isPingRequest(configuration, apiRequest.path)
             route = pingRoute()
+        if apiRequest.path == "/_lango/logout" and !routeMissing(configuration.tokenService)
+            route = logoutRoute()
         if routeMissing(route)
             requestLog.warn("${apiRequest.method} ${apiRequest.path}: route was not found")
             apiResponse.status(404).send({
@@ -279,7 +320,7 @@ start(configuration, routes)
                 requestId: apiRequest.id
             })
             return
-        if route.ping == true
+        if route.ping == true or route.logout == true
             apiResponse.header("Cache-Control", "no-store")
         body = ""
         authorization = httpRequest.headers.authorization
@@ -386,6 +427,8 @@ authenticate(configuration, authorization, route)
     if route.bootstrap == true
         return beginSession(service, raw, configuration)
     if raw == null
+        if route.logout == true
+            return unauthorized()
         if route.anonymous != true
             return unauthorized()
         return beginSession(service, raw, configuration)
@@ -416,6 +459,11 @@ dispatchRequest(claims, route, input, configuration)
         return null
     context token = claims
     response.bindToken(claims)
+    if route.logout == true
+        response.logout()
+        return response.send({
+            loggedOut: true
+        })
     if route.bootstrap == true
         return response.send({
             clientId: claims.clientId

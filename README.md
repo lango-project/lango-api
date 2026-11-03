@@ -366,7 +366,7 @@ an invalid token to a public endpoint is also rejected. Without a TokenService,
 the host retains its previous unauthenticated mode.
 
 Verified claims are available through `context token`; changes made by a login
-or logout handler are signed into the `X-Lango-Token` response header. Renewals
+handler are signed into the `X-Lango-Token` response header. Renewals
 also accompany handler error responses when claims were already verified.
 On handler failure, token changes are discarded and the originally verified
 claims are renewed, so a partially failed login cannot grant authentication.
@@ -381,8 +381,65 @@ path; old authentication and form claims are never restored. Invalid previous
 tokens begin a fresh client identity. Normal endpoint verification still checks
 expiry. The client persists the returned token and resets its local counters.
 
-Revocation and replay policy remain pending. Setting
-`token.auth = false` issues an anonymous token but does not revoke older tokens.
+### Logout and session revocation
+
+With tokens enabled, `POST /_lango/logout` requires a valid bearer token, including
+an anonymous session token. It revokes the entire session: all form tokens with
+that `sessionId` are rejected by normal endpoints and ping. Success returns
+`{ "loggedOut": true }`, `Cache-Control: no-store`, and no `X-Lango-Token`.
+Missing, expired, invalid, or already revoked tokens return 401. The path is
+reserved when a TokenService is configured. Other sessions, including sessions
+with the same `clientId`, are unaffected.
+
+Application handlers can also log out through the response context:
+
+```lango
+logout(input)
+    context response
+    response.logout()
+    return {
+        loggedOut: true
+    }
+```
+
+`response.logout()` returns a Promise and is idempotent within the request. The
+host waits for revocation before sending the response, even when the handler
+does not return that Promise. It uses the originally verified session identity;
+changing `token.sessionId` cannot revoke another session. No replacement token
+is issued. A subsequent handler failure does not undo revocation. A store failure
+returns 500 without a token or a successful logout acknowledgment. Ping and
+completed request-audit callbacks cannot call `response.logout()`.
+
+The service also exposes `revoke(claims)` for trusted server code. Pass verified
+claims, never an unverified request body. `verify` checks the revocation store,
+and `sign` checks it before and after asynchronous signing. Requests already
+executing can still have side effects; revocation does not roll them back.
+Setting `token.auth = false` alone continues to issue an anonymous token and
+does not revoke older tokens. Replay protection and absolute session lifetime
+remain separate work.
+
+By default, each TokenService owns a `MemorySessionRevocations` store, also
+exported by `./tokens`. Its records expire after the configured token lifetime
+plus the five-second clock tolerance. This store is process-local and its state
+is lost on restart: old, otherwise valid tokens can become usable again.
+Persistent or multi-process deployments must supply `options.revocations` with
+a shared, durable store:
+
+| Method | Contract |
+| --- | --- |
+| `isRevoked(sessionId)` | Returns a boolean or a Promise of a boolean. |
+| `revoke(sessionId, expiresAt)` | Records revocation before resolving; `expiresAt` is Unix time in seconds. Repeated writes must retain the later expiry. |
+
+All instances serving the same tokens must consult the same store, use the same
+token lifetime policy, and observe completed revocations across instances.
+Store errors reject authentication or signing; they never bypass revocation.
+The built-in CLI currently uses the in-memory default; custom stores are
+configured through the library TokenService constructor.
+
+A revoked token can still be used at `/_lango/start` to recover only `clientId`;
+it never restores the revoked session or its authentication. Browser clients
+should stop old form sessions and bootstrap a new anonymous session after
+logout. Automatic client logout orchestration is not implemented yet.
 
 ## Authorization callbacks
 

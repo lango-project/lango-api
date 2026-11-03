@@ -1,6 +1,9 @@
 import js global Promise
 import js global TextDecoder
 import js global Uint8Array
+import js global Date
+import js global Map
+import js global Array
 import js "node:crypto" as crypto
 import js "node:util" as util
 import js "jose" as jose
@@ -14,6 +17,36 @@ export class TokenService
         restart(token)
         startSession(token)
         recoverClient(token)
+        revoke(claims)
+        checkSession(claims)
+
+export class MemorySessionRevocations
+    methods
+        revoke(sessionId, expiresAt)
+        isRevoked(sessionId)
+
+MemorySessionRevocations()
+    @sessions = new Map()
+
+MemorySessionRevocations:revoke(sessionId, expiresAt)
+    now = Date/now() / 1000
+    entries = Array/from(@sessions.entries())
+    for entries as entry
+        if entry[1] <= now
+            @sessions.delete(entry[0])
+    previous = @sessions.get(sessionId)
+    if previous == null or previous < expiresAt
+        @sessions.set(sessionId, expiresAt)
+    return null
+
+MemorySessionRevocations:isRevoked(sessionId)
+    expiresAt = @sessions.get(sessionId)
+    if expiresAt == null
+        return false
+    if expiresAt <= Date/now() / 1000
+        @sessions.delete(sessionId)
+        return false
+    return true
 
 TokenService(options)
     if !is_string(options.issuer) or options.issuer == ""
@@ -40,6 +73,11 @@ TokenService(options)
     @ttl = ttl
     @keys = {
     }
+    @revocations = options.revocations
+    if @revocations == null
+        @revocations = new MemorySessionRevocations()
+    if !is_kindof(@revocations.revoke, Function) or !is_kindof(@revocations.isRevoked, Function)
+        throw "ApiTokenRevocationsStoreRequired"
     for options.keys as id: key
         @keys[id] = new Uint8Array(key)
 
@@ -72,7 +110,48 @@ TokenService:sign(claims)
     ttl = @ttl
     signer.setExpirationTime("${ttl}s")
     signer.setJti(crypto/randomUUID())
-    return signer.sign(@keys[@activeKeyId])
+    service = this
+    key = @keys[@activeKeyId]
+    return this.checkSession(payload).then(()
+        capture signer
+        capture key
+        return signer.sign(key)
+    ).then((token)
+        capture service
+        capture payload
+        return checkedToken(service, payload, token)
+    )
+
+checkedToken(service, claims, token)
+    return service.checkSession(claims).then(()
+        capture token
+        return token
+    )
+
+TokenService:checkSession(claims)
+    store = @revocations
+    return Promise/resolve().then(()
+        capture store
+        capture claims
+        return store.isRevoked(claims.sessionId)
+    ).then((revoked)
+        if !is_bool(revoked) or revoked
+            throw "ApiInvalidToken"
+        return null
+    )
+
+TokenService:revoke(claims)
+    if !is_object(claims) or !is_string(claims.sessionId) or claims.sessionId == ""
+        throw "ApiTokenSessionRequired"
+    store = @revocations
+    sessionId = claims.sessionId
+    expiresAt = Date/now() / 1000 + @ttl + 5
+    return Promise/resolve().then(()
+        capture store
+        capture sessionId
+        capture expiresAt
+        return store.revoke(sessionId, expiresAt)
+    )
 
 TokenService:verify(token)
     service = this
@@ -81,9 +160,17 @@ TokenService:verify(token)
         capture token
         return service.verifySigned(token)
     ).then((verified)
-        return verifiedPayload(verified)
+        capture service
+        claims = verifiedPayload(verified)
+        return verifiedSession(service, claims)
     ).catch((error)
         throw "ApiInvalidToken"
+    )
+
+verifiedSession(service, claims)
+    return service.checkSession(claims).then(()
+        capture claims
+        return claims
     )
 
 TokenService:verifySigned(token)
