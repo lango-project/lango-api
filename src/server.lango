@@ -15,6 +15,9 @@ import "./lifecycle"
     initializeSession(session, handlers, appRoot)
 import "./request_audit"
     observeRequest(configuration, httpResponse)
+import "./ping"
+    processPing(configuration, input)
+    isPingRequest(configuration, path)
 
 
 export start(configuration, routes)
@@ -190,6 +193,11 @@ bootstrapRoute()
         bootstrap: true
     }
 
+pingRoute()
+    return {
+        ping: true
+    }
+
 sendFailure(response, log, request)
     log.err("${request.method} ${request.path}: handler failed")
     if not response.completed()
@@ -227,6 +235,8 @@ start(configuration, routes)
         for routes as configured
             if configured.path == "/_lango/start"
                 throw "ApiTokenBootstrapPathIsReserved"
+            if configured.path == "/_lango/ping"
+                throw "ApiTokenPingPathIsReserved"
     server = new http/Server((httpRequest, httpResponse)
         capture configuration
         capture routes
@@ -235,7 +245,8 @@ start(configuration, routes)
         requestId = crypto/randomUUID()
         requestLog = new RequestLog(log, requestId)
         apiRequest = requestContext(httpRequest, requestId)
-        apiResponse = new ApiResponse(httpResponse, configuration.tokenService, requestId, configuration.lifecycle.request != null)
+        auditEnabled = configuration.lifecycle.request != null and !isPingRequest(configuration, apiRequest.path)
+        apiResponse = new ApiResponse(httpResponse, configuration.tokenService, requestId, auditEnabled)
         apiToken = anonymousToken()
         context log = requestLog
         context request = apiRequest
@@ -259,6 +270,8 @@ start(configuration, routes)
         route = findRoute(routes, apiRequest.path)
         if apiRequest.path == "/_lango/start" and !routeMissing(configuration.tokenService)
             route = bootstrapRoute()
+        if isPingRequest(configuration, apiRequest.path)
+            route = pingRoute()
         if routeMissing(route)
             requestLog.warn("${apiRequest.method} ${apiRequest.path}: route was not found")
             apiResponse.status(404).send({
@@ -266,6 +279,8 @@ start(configuration, routes)
                 requestId: apiRequest.id
             })
             return
+        if route.ping == true
+            apiResponse.header("Cache-Control", "no-store")
         body = ""
         authorization = httpRequest.headers.authorization
         httpRequest.on("data", (chunk)
@@ -331,6 +346,8 @@ processRequest(configuration, route, input, authorization)
     context request
     context response
     context log
+    if route.ping == true
+        return processPing(configuration, input)
     return Promise/resolve().then(()
         capture configuration
         capture route

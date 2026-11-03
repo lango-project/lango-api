@@ -139,7 +139,48 @@ and `LANGO_API` overrides. Events belong at the root and require `name`, `mod`,
 and `func`; unknown attributes, nested content, unknown names, and duplicate
 events are rejected. XML and code registrations may define different events;
 defining the same event in both is an error. Replacing the route source also
-replaces its XML events, while code registrations remain. Ping events are pending.
+replaces its XML events, while code registrations remain.
+
+### Batched token ping
+
+With a TokenService, `POST /_lango/ping` is reserved for renewing form tokens.
+It accepts a JSON map with a `forms` array of `{ formId, token }` entries and
+returns the same shape containing renewed tokens. There is no single
+`X-Lango-Token` header for a batch; responses use `Cache-Control: no-store`.
+Authentication is performed per entry rather than through one bearer header.
+Form IDs must be unique nonempty strings; batches contain 1–256 forms and
+individual token strings are limited to 16,384 characters.
+
+Every token is verified with the normal signature, issuer, audience, type,
+key and expiry checks before any callback runs. An expired or invalid token
+rejects the entire batch with 401; malformed batches return 400. Ping does not
+bootstrap an expired session, merge identities, advance a sequence number,
+or require `auth: true`. Each form keeps its own claims and auth state.
+An existing signed `formId` must match the submitted form ID.
+
+Register an optional per-form callback through the library or API XML:
+
+```lango
+host.on({
+    event: "ping"
+    module: "@shop/session"
+    function: "pingSession"
+})
+```
+
+The XML form is `<event name="ping" mod="@shop/session" func="pingSession" />`.
+One callback runs per form, sequentially, within the single HTTP request. It
+receives `ip`, an ISO UTC `timestamp`, `clientId`, `sessionId`, `formId`, `url`,
+and `queryString`. `request`, `token`, and `log` contexts are available. The
+callback may update application claims and return a Promise; return values are
+ignored. Existing client/session identities and signed form/sequence fields
+are preserved. Response methods are managed by the batch handler and cannot
+be used to send or customize an individual form response.
+
+All tokens are signed before the response is sent. Callback/signing failure
+returns 500 without a partial token batch; external callback side effects are
+not rolled back. Ping requests, including their errors, do not produce a
+`request` audit event. Register/start callbacks are not called either.
 
 ### Completed request audit
 
@@ -158,7 +199,7 @@ func="recordRequest" />`. Module exports are checked before listening, as for
 the other lifecycle events. Auditing also works without JWT configuration.
 
 The event fires once after Node's response `finish` event. Completed 4xx/5xx
-responses and `/_lango/start` are included. An aborted response that never
+responses and `/_lango/start` are included; `/_lango/ping` is excluded. An aborted response that never
 finishes is logged and produces no audit event. `finish` means the server handed the response
 to its transport; it does not confirm that the client received or applied it.
 

@@ -1,0 +1,200 @@
+import js global Promise
+import js global Date
+import "./lifecycle"
+    callLifecycle(handler, metadata, appRoot)
+
+export processPing(configuration, input)
+export isPingRequest(configuration, path)
+
+isPingRequest(configuration, path)
+    return configuration.tokenService != null and path == "/_lango/ping"
+
+processPing(configuration, input)
+    context request
+    context response
+    context log
+    response.header("Cache-Control", "no-store")
+    return Promise/resolve().then(()
+        capture input
+        return validateForms(input)
+    ).then((forms)
+        capture configuration
+        return verifyForms(configuration.tokenService, forms, 0, [])
+    ).then((forms)
+        capture configuration
+        capture request
+        capture response
+        capture log
+        return renewForms(configuration, forms, 0, [])
+    ).then((forms)
+        capture response
+        return response.send({
+            forms: forms
+        })
+    ).catch((error)
+        capture request
+        capture response
+        capture log
+        pingFailed(error)
+    )
+
+validateForms(input)
+    if not is_object(input)
+        throw "ApiPingBadRequest"
+    forms = input.forms
+    if !is_array(forms) or forms.length == 0 or forms.length > 256
+        throw "ApiPingBadRequest"
+    names = []
+    result = []
+    for forms as form
+        if not is_object(form)
+            throw "ApiPingBadRequest"
+        if !is_string(form.formId) or form.formId == "" or names.includes(form.formId)
+            throw "ApiPingBadRequest"
+        if !is_string(form.token) or form.token == "" or form.token.length > 16384
+            throw "ApiPingUnauthorized"
+        names.add(form.formId)
+        result.add({
+            formId: form.formId
+            token: form.token
+        })
+    return result
+
+verifyForms(service, forms, index, verified)
+    if index == forms.length
+        return verified
+    form = forms[index]
+    return service.verify(form.token).catch((error)
+        throw "ApiPingUnauthorized"
+    ).then((claims)
+        capture form
+        capture service
+        capture forms
+        capture index
+        capture verified
+        validateIdentity(claims, form.formId)
+        verified.add({
+            formId: form.formId
+            claims: claims
+        })
+        return verifyForms(service, forms, index + 1, verified)
+    )
+
+validateIdentity(claims, formId)
+    if !is_string(claims.clientId) or claims.clientId == "" or !is_string(claims.sessionId) or claims.sessionId == ""
+        throw "ApiPingUnauthorized"
+    if claims.formId != null and claims.formId != formId
+        throw "ApiPingUnauthorized"
+    return null
+
+renewForms(configuration, forms, index, renewed)
+    context request
+    context response
+    context log
+    if index == forms.length
+        return renewed
+    form = forms[index]
+    return renewForm(configuration, form).then((token)
+        capture configuration
+        capture forms
+        capture form
+        capture index
+        capture renewed
+        capture request
+        capture response
+        capture log
+        renewed.add({
+            formId: form.formId
+            token: token
+        })
+        return renewForms(configuration, forms, index + 1, renewed)
+    )
+
+renewForm(configuration, form)
+    context request
+    context log
+    context token = form.claims
+    context response = new PingResponse()
+    claims = form.claims
+    identity = {
+        clientId: claims.clientId
+        sessionId: claims.sessionId
+        formId: claims.formId
+        seqno: claims.seqno
+    }
+    timestamp = new Date()
+    metadata = {
+        ip: request.remoteAddress
+        timestamp: timestamp.toISOString()
+        clientId: claims.clientId
+        sessionId: claims.sessionId
+        formId: form.formId
+        url: request.path
+        queryString: ""
+    }
+    return Promise/resolve().then(()
+        capture configuration
+        capture metadata
+        capture request
+        capture response
+        capture token
+        capture log
+        return callLifecycle(configuration.lifecycle.ping, metadata, configuration.appRoot)
+    ).then(()
+        capture configuration
+        capture form
+        capture claims
+        capture identity
+        claims.clientId = identity.clientId
+        claims.sessionId = identity.sessionId
+        if identity.formId != null
+            claims.formId = identity.formId
+        if identity.seqno != null
+            claims.seqno = identity.seqno
+        validateIdentity(claims, form.formId)
+        return configuration.tokenService.sign(claims)
+    ).catch((error)
+        throw "ApiPingFailed"
+    )
+
+pingFailed(error)
+    context request
+    context response
+    context log
+    switch error
+      case "ApiPingBadRequest"
+          return response.status(400).send({
+              error: "BadRequest"
+              requestId: request.id
+          })
+      case "ApiPingUnauthorized"
+          response.header("WWW-Authenticate", "Bearer")
+          return response.status(401).send({
+              error: "Unauthorized"
+              requestId: request.id
+          })
+      else
+          log.err("${request.method} ${request.path}: ping failed")
+          return response.status(500).send({
+              error: "InternalServerError"
+              requestId: request.id
+          })
+
+class PingResponse
+    methods
+        status(code)
+        header(name, value)
+        send(value)
+        completed()
+
+PingResponse:status(code)
+    throw "ApiPingResponseIsManaged"
+
+PingResponse:header(name, value)
+    throw "ApiPingResponseIsManaged"
+
+PingResponse:send(value)
+    throw "ApiPingResponseIsManaged"
+
+PingResponse:completed()
+    return false

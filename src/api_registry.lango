@@ -313,7 +313,7 @@ test "XML request audit events use the same lifecycle module contract"
 test "XML lifecycle events reject invalid definitions and group nesting"
     cases = []
     cases.add({
-        xml: <api><event name="ping" mod="app" func="ping" /></api>
+        xml: <api><event name="unknown" mod="app" func="unknown" /></api>
         error: "ApiUnknownLifecycleEvent"
     })
     cases.add({

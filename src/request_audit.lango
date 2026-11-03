@@ -2,6 +2,8 @@ import js global Promise
 import js global Date
 import "./lifecycle"
     callLifecycle(handler, metadata, appRoot)
+import "./ping"
+    isPingRequest(configuration, path)
 
 export observeRequest(configuration, httpResponse)
 
@@ -10,6 +12,8 @@ observeRequest(configuration, httpResponse)
     context response
     context log
     if configuration.lifecycle.request == null
+        return null
+    if isPingRequest(configuration, request.path)
         return null
     started = Date/now()
     httpResponse.once("finish", ()
