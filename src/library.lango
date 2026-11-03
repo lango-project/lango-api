@@ -247,6 +247,20 @@ test "startup rejects a missing lifecycle module export"
     catch error
         assert error == "ApiHandlerNotExported: lifecycle:start -> missing"
 
+test "startup rejects a missing request audit module export"
+    handlers = createLifecycle({
+        request: {
+            module: {
+            }
+            function: "missing"
+        }
+    })
+    try
+        validateRouteModules("/tmp", lifecycleTargets(handlers))
+        assert false
+    catch error
+        assert error == "ApiHandlerNotExported: lifecycle:request -> missing"
+
 test "XML and code lifecycle registrations merge without silent overrides"
     base = createLifecycle({
         register: allowAuthForTest

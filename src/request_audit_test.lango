@@ -1,0 +1,530 @@
+import js global Promise
+import js global AbortSignal
+import js global fetch
+import js "node:crypto" as crypto
+import js "node:http" as http
+import "./library"
+    class Host
+    class Routes
+import "./tokens"
+    class TokenService
+
+export main(args)
+
+class Collector
+    properties
+        records
+        contexts
+    methods
+        observe(input)
+        wait(count)
+        waiting(count, resolve)
+        hold()
+        suspend(resolve)
+        release()
+
+Collector()
+    @records = []
+    @contexts = []
+    @waiters = []
+
+Collector:observe(input)
+    context request
+    context response
+    context token
+    assert response.completed()
+    assert response.statusCode == input.status
+    assert request.id == input.requestId
+    assert request.headers.authorization == null
+    assert request.headers.cookie == null
+    @records.add(from_json(to_json(input)))
+    @contexts.add(from_json(to_json(token)))
+    token.auth = true
+    token.auditOnly = true
+    if is_object(input.output)
+        input.output.auditOnly = true
+    for @waiters as waiter
+        if @records.length >= waiter.count
+            waiter.resolve(null)
+    mode = null
+    if is_object(input.input)
+        mode = input.input.auditMode
+    switch mode
+      case "throw"
+          throw "ExpectedAuditFailure"
+      case "reject"
+          return Promise/reject("ExpectedAuditRejection")
+      case "send"
+          return response.send("must-not-replace-response")
+      case "hold"
+          return this.hold()
+    return null
+
+Collector:wait(count)
+    if @records.length >= count
+        return Promise/resolve()
+    collector = this
+    ready = new Promise((resolve, reject)
+        capture collector
+        capture count
+        collector.waiting(count, resolve)
+    )
+    return ready
+
+Collector:waiting(count, resolve)
+    @waiters.add({
+        count: count
+        resolve: resolve
+    })
+    return null
+
+Collector:hold()
+    collector = this
+    pending = new Promise((resolve, reject)
+        capture collector
+        collector.suspend(resolve)
+    )
+    return pending
+
+Collector:suspend(resolve)
+    @resume = resolve
+    return null
+
+Collector:release()
+    resume = @resume
+    resume(null)
+    return null
+
+class Harness
+    properties
+        collector
+        service
+        url
+    methods
+        begin()
+        listening(completion)
+        request(path, raw, token = null)
+        stop()
+
+Harness(tokens = true)
+    @tokens = tokens
+
+Harness:begin()
+    @collector = new Collector()
+    @service = new TokenService({
+        issuer: "audit-test"
+        audience: "audit-test"
+        activeKeyId: "test"
+        keys: {
+            test: crypto/randomBytes(32)
+        }
+    })
+    service = @service
+    if !@tokens
+        service = null
+    host = new Host({
+        host: "127.0.0.1"
+        port: 0
+        appRoot: "."
+        tokenService: service
+    })
+    host.on({
+        event: "request"
+        module: @collector
+        function: "observe"
+    })
+    routes = new Routes()
+    routes.endpoint({
+        path: "/edit"
+        function: edit
+        anonymous: true
+    })
+    routes.endpoint({
+        path: "/fail"
+        function: fail
+        anonymous: true
+    })
+    routes.endpoint({
+        path: "/deny"
+        function: edit
+        anonymous: true
+        auth: deny
+    })
+    host.routes(routes)
+    harness = this
+    return host.start().then((server)
+        capture harness
+        return awaitListening(harness, server)
+    )
+
+awaitListening(harness, server)
+    harness.server = server
+    pending = new Promise((resolve, reject)
+        capture harness
+        capture server
+        listen(server, harness, resolve, reject)
+    )
+    return pending
+
+listen(server, harness, resolve, reject)
+    completion = {
+        resolve: resolve
+        reject: reject
+    }
+    server.once("listening", ()
+        capture harness
+        capture completion
+        harness.listening(completion)
+    )
+    server.once("error", (error)
+        capture completion
+        completion.reject(error)
+    )
+
+Harness:listening(completion)
+    address = this.server.address()
+    @url = "http://127.0.0.1:${address.port}"
+    completion.resolve(this)
+
+Harness:request(path, raw, token = null)
+    headers = {
+        "Content-Type": "application/json"
+        "Cookie": "session=must-not-reach-audit-context"
+    }
+    if token != null
+        headers.Authorization = "Bearer ${token}"
+    return fetch("${@url}${path}", {
+        method: "POST"
+        headers: headers
+        body: raw
+        signal: AbortSignal/timeout(5000)
+    })
+
+Harness:stop()
+    if this.server != null
+        this.server.close()
+        this.server.closeAllConnections()
+
+edit(input)
+    context request
+    context token
+    input.changedByHandler = true
+    return {
+        ok: true
+        requestId: request.id
+        auth: token.auth
+    }
+
+fail(input)
+    context token
+    token.auth = true
+    throw "ExpectedHandlerFailure"
+
+deny(path, input)
+    context token
+    token.auth = true
+    return false
+
+main(args)
+    harness = new Harness()
+    return harness.begin().then((ready)
+        capture harness
+        return checkSuccess(harness)
+    ).finally(()
+        capture harness
+        harness.stop()
+    ).then(()
+        return checkLegacyAudit()
+    )
+
+checkLegacyAudit()
+    harness = new Harness(false)
+    return harness.begin().then((ready)
+        capture harness
+        return legacyRequest(harness)
+    ).finally(()
+        capture harness
+        harness.stop()
+    )
+
+legacyRequest(harness)
+    return harness.request("/edit", "{}").then((response)
+        capture harness
+        assertLegacyResponse(response)
+        return legacyAudit(harness)
+    )
+
+assertLegacyResponse(response)
+    assert response.status == 200
+    assert response.headers.get("X-Lango-Token") == null
+    return null
+
+legacyAudit(harness)
+    return harness.collector.wait(1).then(()
+        capture harness
+        assertLegacyRecord(harness)
+        println("PASS request audit also works without JWT configuration")
+    )
+
+assertLegacyRecord(harness)
+    record = harness.collector.records[0]
+    assert record.status == 200
+    assert "clientId" in record
+    assert record.clientId == null
+    assert record.sessionId == null
+    return null
+
+checkSuccess(harness)
+    input = {
+        formId: "profile"
+        seqno: 1
+        transactionId: "client-correlation"
+        values: {
+            email: "ada@example.com"
+        }
+    }
+    return harness.request("/edit", to_json(input)).then((response)
+        capture harness
+        assert response.status == 200
+        token = response.headers.get("X-Lango-Token")
+        return readSuccess(harness, response, token)
+    )
+
+readSuccess(harness, response, token)
+    return response.json().then((body)
+        capture harness
+        capture token
+        assertNoAuditChanges(body)
+        return auditSuccess(harness, body, token)
+    )
+
+auditSuccess(harness, body, token)
+    return harness.collector.wait(1).then(()
+        capture harness
+        capture body
+        capture token
+        assertSuccessRecord(harness, body)
+        return verifyRenewal(harness, token)
+    )
+
+assertSuccessRecord(harness, body)
+    record = harness.collector.records[0]
+    input = record.input
+    output = record.output
+    assert record.status == 200
+    assert record.url == "/edit"
+    assert record.requestId == body.requestId
+    assert record.formId == "profile"
+    assert record.seqno == 1
+    assert record.transactionId == "client-correlation"
+    assert record.durationMs >= 0
+    assert is_string(record.clientId)
+    assert is_string(record.sessionId)
+    assert input.changedByHandler == null
+    assert record.input.values.email == "ada@example.com"
+    assert output.auditOnly == null
+    return null
+
+assertNoAuditChanges(value)
+    assert !value.auth
+    assert value.auditOnly == null
+    return null
+
+verifyRenewal(harness, token)
+    return harness.service.verify(token).then((claims)
+        capture harness
+        capture token
+        assertNoAuditChanges(claims)
+        return checkErrors(harness, token, 0)
+    )
+
+errorCases()
+    return [{
+        path: "/fail"
+        raw: "{}"
+        status: 500
+    }, {
+        path: "/deny"
+        raw: "{}"
+        status: 403
+    }, {
+        path: "/edit"
+        raw: "broken-json"
+        status: 400
+    }, {
+        path: "/missing"
+        raw: "{}"
+        status: 404
+    }]
+
+checkErrors(harness, token, index)
+    cases = errorCases()
+    if index == cases.length
+        return checkAuditFailures(harness, token, 0)
+    expected = cases[index]
+    return harness.request(expected.path, expected.raw, token).then((response)
+        capture harness
+        capture token
+        capture index
+        capture expected
+        assert response.status == expected.status
+        return waitForError(harness, token, index, expected)
+    )
+
+waitForError(harness, token, index, expected)
+    return harness.collector.wait(index + 2).then(()
+        capture harness
+        capture token
+        capture index
+        capture expected
+        assertErrorRecord(harness, index, expected)
+        return checkErrors(harness, token, index + 1)
+    )
+
+assertErrorRecord(harness, index, expected)
+    records = harness.collector.records
+    contexts = harness.collector.contexts
+    record = records[index + 1]
+    claims = contexts[index + 1]
+    assert record.status == expected.status
+    assert record.output.requestId == record.requestId
+    assert !claims.auth
+    if expected.status >= 400 and expected.status <= 404
+        if expected.status != 403
+            assert record.input == null
+    return null
+
+checkAuditFailures(harness, token, index)
+    modes = ["throw", "reject", "send", "hold"]
+    if index == modes.length
+        assert harness.collector.records.length == 9
+        return checkUnauthorized(harness)
+    mode = modes[index]
+    input = {
+        auditMode: mode
+    }
+    return harness.request("/edit", to_json(input), token).then((response)
+        capture harness
+        capture token
+        capture index
+        capture mode
+        assert response.status == 200
+        return readAuditFailure(harness, response, token, index, mode)
+    )
+
+readAuditFailure(harness, response, token, index, mode)
+    return response.json().then((body)
+        capture harness
+        capture token
+        capture index
+        capture mode
+        assertNoAuditChanges(body)
+        return finishAuditFailure(harness, token, index, mode)
+    )
+
+finishAuditFailure(harness, token, index, mode)
+    return harness.collector.wait(index + 6).then(()
+        capture harness
+        capture token
+        capture index
+        capture mode
+        if mode == "hold"
+            harness.collector.release()
+        return checkAuditFailures(harness, token, index + 1)
+    )
+
+checkUnauthorized(harness)
+    return harness.request("/edit", "{}", "invalid-token").then((response)
+        capture harness
+        assert response.status == 401
+        return unauthorizedAudit(harness)
+    )
+
+unauthorizedAudit(harness)
+    return harness.collector.wait(10).then(()
+        capture harness
+        assertUnauthorizedRecord(harness)
+        return checkBootstrap(harness)
+    )
+
+assertUnauthorizedRecord(harness)
+    record = harness.collector.records[9]
+    assert record.status == 401
+    assert "clientId" in record
+    assert "sessionId" in record
+    assert record.clientId == null
+    assert record.sessionId == null
+    return null
+
+checkBootstrap(harness)
+    return harness.request("/_lango/start", "{}").then((response)
+        capture harness
+        assert response.status == 200
+        return bootstrapAudit(harness)
+    )
+
+bootstrapAudit(harness)
+    return harness.collector.wait(11).then(()
+        capture harness
+        assertBootstrapRecord(harness)
+        return checkAbort(harness)
+    )
+
+assertBootstrapRecord(harness)
+    record = harness.collector.records[10]
+    assert record.url == "/_lango/start"
+    assert record.status == 200
+    assert record.output.clientId == record.clientId
+    assert record.output.sessionId == record.sessionId
+    return null
+
+checkAbort(harness)
+    pending = new Promise((resolve, reject)
+        capture harness
+        abortRequest(harness, resolve, reject)
+    )
+    return pending
+
+abortRequest(harness, resolve, reject)
+    completion = {
+        resolve: resolve
+        reject: reject
+    }
+    client = http/request("${harness.url}/edit", {
+        method: "POST"
+    })
+    server = harness.server
+    server.once("request", (request, response)
+        capture harness
+        capture completion
+        capture client
+        observeAbort(request, harness, completion)
+        client.destroy()
+    )
+    client.on("error", (error)
+        capture completion
+        if error.code != "ECONNRESET"
+            completion.reject(error)
+    )
+    client.setTimeout(5000, ()
+        capture completion
+        capture client
+        completion.reject("AuditAbortTimeout")
+        client.destroy()
+    )
+    client.write("{")
+    return null
+
+observeAbort(request, harness, completion)
+    request.once("aborted", ()
+        capture harness
+        capture completion
+        abortCompleted(harness, completion)
+    )
+    return null
+
+abortCompleted(harness, completion)
+    assert harness.collector.records.length == 11
+    println("PASS request audit: snapshots, metadata, errors, isolation, async callbacks and aborted requests")
+    completion.resolve(null)
+    return null

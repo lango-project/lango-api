@@ -139,8 +139,51 @@ and `LANGO_API` overrides. Events belong at the root and require `name`, `mod`,
 and `func`; unknown attributes, nested content, unknown names, and duplicate
 events are rejected. XML and code registrations may define different events;
 defining the same event in both is an error. Replacing the route source also
-replaces its XML events, while code registrations remain. Request audit and
-ping events are pending.
+replaces its XML events, while code registrations remain. Ping events are pending.
+
+### Completed request audit
+
+Register a `request` event to observe a finished HTTP response:
+
+```lango
+host.on({
+    event: "request"
+    module: "@shop/audit"
+    function: "recordRequest"
+})
+```
+
+The XML equivalent is `<event name="request" mod="@shop/audit"
+func="recordRequest" />`. Module exports are checked before listening, as for
+the other lifecycle events. Auditing also works without JWT configuration.
+
+The event fires once after Node's response `finish` event. Completed 4xx/5xx
+responses and `/_lango/start` are included. An aborted response that never
+finishes is logged and produces no audit event. `finish` means the server handed the response
+to its transport; it does not confirm that the client received or applied it.
+
+The callback receives `requestId`, `method`, `ip`, an ISO UTC `timestamp`,
+`durationMs`, `url`, `queryString`, `status`, `clientId`, `sessionId`,
+`transactionId`, `formId`, `seqno`, `input`, and `output`. Unavailable identities
+or client fields are null. Input is copied before handlers run; it is null if
+the request was rejected before parsing or contained invalid JSON. Output is
+the JSON response value supplied to the HTTP writer. `transactionId`, `formId`,
+and `seqno` are client-supplied correlation data, not trusted identity or proof
+that an operation is unique.
+
+The `request` and `token` contexts are detached snapshots. Audit request headers
+contain only content type and user agent; Authorization and Cookie are omitted.
+The `response` context exposes `statusCode`, `body`, and `completed()`; attempts
+to use `status`, `header`, or `send` throw `ApiResponseAlreadySent`. The request's
+`log` context remains available. Changing an audit snapshot cannot alter the
+response or the issued token.
+
+Return values are ignored. Promise callbacks do not delay the response, and
+exceptions or rejections are logged without changing its result. Auditing is
+optional and runs in process; it does not provide a durable delivery queue or
+an automatic shutdown drain. Input/output are delivered to the configured
+callback without being written to logs automatically; the application chooses
+which fields to retain or redact.
 
 ## Configuration
 

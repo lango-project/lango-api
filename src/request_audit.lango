@@ -1,0 +1,128 @@
+import js global Promise
+import js global Date
+import "./lifecycle"
+    callLifecycle(handler, metadata, appRoot)
+
+export observeRequest(configuration, httpResponse)
+
+observeRequest(configuration, httpResponse)
+    context request
+    context response
+    context log
+    if configuration.lifecycle.request == null
+        return null
+    started = Date/now()
+    httpResponse.once("finish", ()
+        capture configuration
+        capture started
+        capture request
+        capture response
+        capture log
+        notifyCompleted(configuration, started)
+    )
+    httpResponse.once("close", ()
+        capture httpResponse
+        capture request
+        capture log
+        if !httpResponse.writableFinished
+            log.warn("${request.method} ${request.path}: response did not finish")
+    )
+    return null
+
+notifyCompleted(configuration, started)
+    context request
+    context response
+    context log
+    return Promise/resolve().then(()
+        capture configuration
+        capture started
+        capture request
+        capture response
+        capture log
+        return auditCompleted(configuration, started)
+    ).catch((error)
+        capture log
+        log.err("Request audit callback failed")
+    )
+
+auditCompleted(configuration, started)
+    context request
+    context response
+    context log
+    snapshot = response.completedSnapshot()
+    metadata = requestMetadata(request, snapshot, started)
+    context request = auditRequest(request)
+    context response = new CompletedResponse(snapshot.status, snapshot.output)
+    context token = snapshot.token
+    return callLifecycle(configuration.lifecycle.request, metadata, configuration.appRoot)
+
+requestMetadata(request, snapshot, started)
+    timestamp = new Date()
+    input = snapshot.input
+    claims = snapshot.token
+    transactionId = null
+    formId = null
+    seqno = null
+    if is_object(input)
+        transactionId = input.transactionId
+        formId = input.formId
+        seqno = input.seqno
+    queryString = ""
+    query = request.path.indexOf("?")
+    if query >= 0
+        queryString = request.path.slice(query + 1)
+    return {
+        requestId: request.id
+        method: request.method
+        ip: request.remoteAddress
+        timestamp: timestamp.toISOString()
+        durationMs: Date/now() - started
+        clientId: claims.clientId
+        sessionId: claims.sessionId
+        transactionId: transactionId
+        formId: formId
+        seqno: seqno
+        url: request.path
+        queryString: queryString
+        status: snapshot.status
+        input: snapshot.input
+        output: snapshot.output
+    }
+
+auditRequest(request)
+    return {
+        id: request.id
+        method: request.method
+        path: request.path
+        remoteAddress: request.remoteAddress
+        headers: {
+            "content-type": request.headers["content-type"]
+            "user-agent": request.headers["user-agent"]
+        }
+    }
+
+class CompletedResponse
+    properties
+        statusCode
+        body
+    methods
+        status(code)
+        header(name, value)
+        send(value)
+        completed()
+
+CompletedResponse(status, body)
+    @statusCode = status
+    @body = body
+
+CompletedResponse:status(code)
+    throw "ApiResponseAlreadySent"
+
+CompletedResponse:header(name, value)
+    throw "ApiResponseAlreadySent"
+
+CompletedResponse:send(value)
+    throw "ApiResponseAlreadySent"
+
+CompletedResponse:completed()
+    return true

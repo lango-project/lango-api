@@ -198,7 +198,12 @@ routeMissing(route)
     return route == null
 
 test "exact routes win over the longest wildcard independently of registration order"
-    routes = routesFromXml("<api><endpoint path=\"/app/*\" mod=\"ui\" func=\"handle\" /><endpoint path=\"/app/admin/*\" mod=\"admin\" func=\"handle\" /><endpoint path=\"/app/admin/save\" mod=\"save\" func=\"handle\" /></api>")
+    xml = <api>
+        <endpoint path="/app/*" mod="ui" func="handle" />
+        <endpoint path="/app/admin/*" mod="admin" func="handle" />
+        <endpoint path="/app/admin/save" mod="save" func="handle" />
+    </api>
+    routes = routesFromXml(xml)
     exact = findRoute(routes, "/app/admin/save")
     nested = findRoute(routes, "/app/admin/edit")
     assert exact.mod == "save"
@@ -206,14 +211,14 @@ test "exact routes win over the longest wildcard independently of registration o
     assert routeMissing(findRoute(routes, "/application/test"))
 
 test "endpoint XML requires its route fields"
-    endpoint = endpointFromTag(xml2obj("<endpoint path=\"/math/add\" mod=\"math\" func=\"add\" />"))
+    endpoint = endpointFromTag(xml2obj(<endpoint path="/math/add" mod="math" func="add" />))
     assert endpoint.path == "/math/add"
     assert endpoint.mod == "math"
     assert endpoint.func == "add"
 
 test "endpoint XML rejects a relative path"
     try
-        endpointFromTag(xml2obj("<endpoint path=\"math/add\" mod=\"math\" func=\"add\" />"))
+        endpointFromTag(xml2obj(<endpoint path="math/add" mod="math" func="add" />))
         assert false
     catch error
         assert error == "ApiEndpointPathMustStartWithSlash"
@@ -233,78 +238,110 @@ test "endpoint maps retain direct module and handler references"
     assert endpoint.handler == handler
 
 test "groups inherit path and module"
-    routes = routesFromXml("<api><group path=\"/math\" mod=\"math\"><endpoint path=\"/add\" func=\"add\" /></group></api>")
+    xml = <api>
+        <group path="/math" mod="math">
+            <endpoint path="/add" func="add" />
+        </group>
+    </api>
+    routes = routesFromXml(xml)
     assert routes[0].path == "/math/add"
     assert routes[0].mod == "math"
 
 test "anonymous flags inherit and can be overridden"
-    routes = routesFromXml("<api><group path=\"/public\" mod=\"app\" anonymous=\"true\"><endpoint path=\"/open\" func=\"open\" /><endpoint path=\"/private\" func=\"private\" anonymous=\"false\" /></group></api>")
+    xml = <api>
+        <group path="/public" mod="app" anonymous="true">
+            <endpoint path="/open" func="open" />
+            <endpoint path="/private" func="private" anonymous="false" />
+        </group>
+    </api>
+    routes = routesFromXml(xml)
     assert routes[0].anonymous
     assert !routes[1].anonymous
 
 test "api XML rejects an unknown tag and attribute"
     try
-        routesFromXml("<api><unknown /></api>")
+        routesFromXml(<api><unknown /></api>)
         assert false
     catch error
         assert error == "ApiConfigUnknownTag: <unknown>"
     try
-        routesFromXml("<api><endpoint path=\"/health\" mod=\"health\" func=\"check\" typo=\"true\" /></api>")
+        routesFromXml(<api><endpoint path="/health" mod="health" func="check" typo="true" /></api>)
         assert false
     catch error
         assert error == "ApiConfigUnknownAttribute: <endpoint> typo"
 
 test "XML auth definitions resolve across group inheritance and declaration order"
-    routes = routesFromXml("<api><group path=\"/private\" mod=\"app\" auth=\"check\"><endpoint path=\"/first\" func=\"first\" /></group><auth name=\"check\" mod=\"security\" func=\"check\" /></api>")
+    xml = <api>
+        <group path="/private" mod="app" auth="check">
+            <endpoint path="/first" func="first" />
+        </group>
+        <auth name="check" mod="security" func="check" />
+    </api>
+    routes = routesFromXml(xml)
     assert routes[0].auth.module == "security"
     assert routes[0].auth.function == "check"
     try
-        routesFromXml("<api><endpoint path=\"/private\" mod=\"app\" func=\"run\" auth=\"unknown\" /></api>")
+        routesFromXml(<api><endpoint path="/private" mod="app" func="run" auth="unknown" /></api>)
         assert false
     catch error
         assert error == "ApiUnknownAuth: unknown"
 
 test "XML lifecycle events are separate from routes and preserve handler references"
-    api = apiFromXml("<api><event name=\"register\" mod=\"@shop/session\" func=\"registerClient\" /><endpoint path=\"/health\" mod=\"app\" func=\"health\" /><event name=\"start\" mod=\"@shop/session\" func=\"startSession\" /></api>")
+    xml = <api>
+        <event name="register" mod="@shop/session" func="registerClient" />
+        <endpoint path="/health" mod="app" func="health" />
+        <event name="start" mod="@shop/session" func="startSession" />
+    </api>
+    api = apiFromXml(xml)
     assert api.routes.length == 1
     assert api.routes[0].path == "/health"
     assert api.lifecycle.register.module == "@shop/session"
     assert api.lifecycle.register.function == "registerClient"
     assert api.lifecycle.start.function == "startSession"
-    assert routesFromXml("<api><event name=\"start\" mod=\"app\" func=\"start\" /></api>").length == 0
+    assert routesFromXml(<api><event name="start" mod="app" func="start" /></api>).length == 0
+
+test "XML request audit events use the same lifecycle module contract"
+    xml = <api>
+        <event name="request" mod="@shop/audit" func="record" />
+    </api>
+    api = apiFromXml(xml)
+    assert api.routes.length == 0
+    handler = api.lifecycle.request
+    assert handler.module == "@shop/audit"
+    assert handler.function == "record"
 
 test "XML lifecycle events reject invalid definitions and group nesting"
     cases = []
     cases.add({
-        xml: "<api><event name=\"ping\" mod=\"app\" func=\"ping\" /></api>"
+        xml: <api><event name="ping" mod="app" func="ping" /></api>
         error: "ApiUnknownLifecycleEvent"
     })
     cases.add({
-        xml: "<api><event name=\"start\" func=\"start\" /></api>"
+        xml: <api><event name="start" func="start" /></api>
         error: "ApiLifecycleRequiresModuleAndFunction"
     })
     cases.add({
-        xml: "<api><event name=\"start\" mod=\"app\" /></api>"
+        xml: <api><event name="start" mod="app" /></api>
         error: "ApiLifecycleRequiresModuleAndFunction"
     })
     cases.add({
-        xml: "<api><event name=\"start\" mod=\"app\" func=\"start\" typo=\"true\" /></api>"
+        xml: <api><event name="start" mod="app" func="start" typo="true" /></api>
         error: "ApiConfigUnknownAttribute: <event> typo"
     })
     cases.add({
-        xml: "<api><event name=\"start\" mod=\"app\" func=\"start\">text</event></api>"
+        xml: <api><event name="start" mod="app" func="start">text</event></api>
         error: "ApiLifecycleEventMustBeEmpty"
     })
     cases.add({
-        xml: "<api><event name=\"start\" mod=\"app\" func=\"start\"><child /></event></api>"
+        xml: <api><event name="start" mod="app" func="start"><child /></event></api>
         error: "ApiLifecycleEventMustBeEmpty"
     })
     cases.add({
-        xml: "<api><event name=\"start\" mod=\"app\" func=\"start\" /><event name=\"start\" mod=\"app\" func=\"other\" /></api>"
+        xml: <api><event name="start" mod="app" func="start" /><event name="start" mod="app" func="other" /></api>
         error: "ApiDuplicateLifecycleEvent: start"
     })
     cases.add({
-        xml: "<api><group path=\"/app\"><event name=\"start\" mod=\"app\" func=\"start\" /></group></api>"
+        xml: <api><group path="/app"><event name="start" mod="app" func="start" /></group></api>
         error: "ApiConfigUnknownTag: <event>"
     })
     for cases as expected

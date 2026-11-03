@@ -8,11 +8,13 @@ export createLifecycle(spec)
 export addLifecycle(handlers, options)
 export lifecycleTargets(handlers)
 export initializeSession(session, handlers, appRoot)
+export callLifecycle(handler, metadata, appRoot)
 
 createLifecycle(spec)
     handlers = {
         register: null
         start: null
+        request: null
     }
     if spec == null
         return handlers
@@ -38,7 +40,7 @@ createLifecycle(spec)
     return handlers
 
 requireEvent(event)
-    if event != "register" and event != "start"
+    if event != "register" and event != "start" and event != "request"
         throw "ApiUnknownLifecycleEvent"
     return null
 
@@ -184,7 +186,7 @@ test "lifecycle registration rejects unknown and duplicate events"
         assert error == "ApiDuplicateLifecycleEvent: start"
     try
         createLifecycle({
-            request: lifecycleNoop
+            ping: lifecycleNoop
         })
         assert false
     catch error

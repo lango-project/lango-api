@@ -13,6 +13,8 @@ import "./authorization"
 import "./lifecycle"
     createLifecycle(spec)
     initializeSession(session, handlers, appRoot)
+import "./request_audit"
+    observeRequest(configuration, httpResponse)
 
 
 export start(configuration, routes)
@@ -27,6 +29,8 @@ class ApiResponse
         discardTokenChanges()
         write(body, token)
         signingFailed()
+        receiveInput(input)
+        completedSnapshot()
 
 class RequestLog
     methods
@@ -35,13 +39,31 @@ class RequestLog
         warn(message)
         err(message)
 
-ApiResponse(httpResponse, tokenService = null, requestId = null)
+ApiResponse(httpResponse, tokenService = null, requestId = null, auditEnabled = false)
     @httpResponse = httpResponse
     @statusCode = 200
     @completed = false
     @tokenService = tokenService
     @claims = null
     @requestId = requestId
+    @auditEnabled = auditEnabled
+    @input = null
+
+ApiResponse:receiveInput(input)
+    if @auditEnabled
+        @input = from_json(to_json(input))
+    return null
+
+ApiResponse:completedSnapshot()
+    claims = @claims
+    if claims == null
+        claims = anonymousToken()
+    return {
+        status: @statusCode
+        input: @input
+        output: from_json(@body)
+        token: from_json(to_json(claims))
+    }
 
 ApiResponse:bindToken(claims)
     @claims = claims
@@ -95,6 +117,8 @@ ApiResponse:send(value)
     return this.write(body, null)
 
 ApiResponse:write(body, token)
+    if @auditEnabled
+        @body = body
     res = @httpResponse
     if res.getHeader("Content-Type") == null
         res.setHeader("Content-Type", "application/json; charset=utf-8")
@@ -211,12 +235,13 @@ start(configuration, routes)
         requestId = crypto/randomUUID()
         requestLog = new RequestLog(log, requestId)
         apiRequest = requestContext(httpRequest, requestId)
-        apiResponse = new ApiResponse(httpResponse, configuration.tokenService, requestId)
+        apiResponse = new ApiResponse(httpResponse, configuration.tokenService, requestId, configuration.lifecycle.request != null)
         apiToken = anonymousToken()
         context log = requestLog
         context request = apiRequest
         context response = apiResponse
         context token = apiToken
+        observeRequest(configuration, httpResponse)
         if httpRequest.method != "POST"
             requestLog.warn("${apiRequest.method} ${apiRequest.path}: method is not allowed")
             apiResponse.status(405).send({
@@ -268,6 +293,7 @@ start(configuration, routes)
                     requestId: request.id
                 })
                 return
+            response.receiveInput(input)
             processRequest(configuration, route, input, authorization)
         )
     )
