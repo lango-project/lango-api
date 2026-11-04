@@ -2,8 +2,7 @@ import js global Promise
 import js global TextDecoder
 import js global Uint8Array
 import js global Date
-import js global Map
-import js global Array
+import js global Reflect
 import js global Math
 import js "node:crypto" as crypto
 import js "node:util" as util
@@ -27,25 +26,27 @@ export class MemorySessionRevocations
         isRevoked(sessionId)
 
 MemorySessionRevocations()
-    @sessions = new Map()
+    @sessions = {
+    }
 
 MemorySessionRevocations:revoke(sessionId, expiresAt)
     now = Date/now() / 1000
-    entries = Array/from(@sessions.entries())
-    for entries as entry
-        if entry[1] <= now
-            @sessions.delete(entry[0])
-    previous = @sessions.get(sessionId)
+    for @sessions as name: expiry
+        if expiry <= now
+            Reflect/deleteProperty(@sessions, name)
+    key = "session:${sessionId}"
+    previous = @sessions[key]
     if previous == null or previous < expiresAt
-        @sessions.set(sessionId, expiresAt)
+        @sessions[key] = expiresAt
     return null
 
 MemorySessionRevocations:isRevoked(sessionId)
-    expiresAt = @sessions.get(sessionId)
+    key = "session:${sessionId}"
+    expiresAt = @sessions[key]
     if expiresAt == null
         return false
     if expiresAt <= Date/now() / 1000
-        @sessions.delete(sessionId)
+        Reflect/deleteProperty(@sessions, key)
         return false
     return true
 

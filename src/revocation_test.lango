@@ -180,6 +180,10 @@ checkMemoryExpiry()
     store.revoke("active", now + 10)
     assert store.isRevoked("active")
     assert !store.isRevoked("unrelated")
+    for ["__proto__", "constructor", "prototype", "toString"] as name
+        assert !store.isRevoked(name)
+        store.revoke(name, now + 30)
+        assert store.isRevoked(name)
     return null
 
 issueForms(harness)
