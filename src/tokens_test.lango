@@ -134,10 +134,51 @@ restartExpired(service, token)
 
 classifyExpired(service, token)
     return service.startSession(token).then((session)
+        capture service
         assert !session.registered
         assert session.claims.clientId == "stable-client"
         assert !session.claims.auth
         println("PASS expired identity recovery does not register the client again")
+        return checkSessionIsolation(service)
+    )
+
+checkSessionIsolation(service)
+    return service.sign({
+        auth: true
+        clientId: "browser-client"
+    }).then((token)
+        capture service
+        return checkTabSessions(service, token)
+    )
+
+checkTabSessions(service, token)
+    return Promise/all([service.startSession(token), service.startSession(token)]).then((sessions)
+        capture service
+        capture token
+        first = sessions[0].claims
+        second = sessions[1].claims
+        assert first.clientId == "browser-client"
+        assert second.clientId == first.clientId
+        assert first.sessionId != second.sessionId
+        assert !first.auth
+        assert !second.auth
+        return service.verify(token)
+    ).then((claims)
+        capture service
+        assert claims.auth
+        assert claims.clientId == "browser-client"
+        return checkNewClients(service)
+    )
+
+checkNewClients(service)
+    return Promise/all([service.startSession(null), service.startSession(null)]).then((sessions)
+        first = sessions[0].claims
+        second = sessions[1].claims
+        assert first.clientId != second.clientId
+        assert first.sessionId != second.sessionId
+        assert !first.auth
+        assert !second.auth
+        println("PASS tabs recover only shared client identity into independent anonymous sessions; unseeded clients receive independent identities")
     )
 
 assertFormCleared(claims)

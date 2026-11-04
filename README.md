@@ -395,6 +395,22 @@ path; old authentication and form claims are never restored. Invalid previous
 tokens begin a fresh client identity. Normal endpoint verification still checks
 expiry. The client persists the returned token and resets its local counters.
 
+### Session scope across tabs and devices
+
+Every bootstrap creates an independent session, including repeated bootstrap
+with the same valid previous token. Only `clientId` is recovered; authentication
+and form state are not inherited. Existing sessions remain valid until their
+own expiry or revocation. A page reload starts another session rather than
+restoring a previous tab's authentication.
+
+Logout affects exactly the verified sessionId. It does not log out other tabs
+with the same clientId or other devices belonging to an account. Clients with
+no valid identity seed receive new clientIds, so simultaneous first launches
+can register separate identities. clientId is not a hardware or account ID.
+Applications needing account-wide logout or device limits must define their
+own authorized account/session registry; a client-supplied clientId or account
+name is not sufficient authority for that operation.
+
 ### Absolute session lifetime
 
 Every new session receives `sessionStartedAt` and `sessionExpiresAt`, expressed
