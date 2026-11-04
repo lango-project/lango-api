@@ -20,7 +20,7 @@ export configurationFileFor(paths, options, environment)
 export apiFileFor(configuration, options, environment)
 
 usage()
-    return "Usage: lango-api <app> [development|server] [--app-root <path>] [--data-dir <path>] [--state-dir <path>] [--log-dir <path>] [--config <file>] [--api <file>] [--host <host>] [--port <port>] [--jwt-enabled true|false] [--jwt-issuer <issuer>] [--jwt-audience <audience>] [--jwt-keys <file>] [--jwt-key-id <id>] [--jwt-ttl <seconds>] [--jwt-session-ttl <seconds>]"
+    return "Usage: lango-api <app> [development|server] [--app-root <path>] [--data-dir <path>] [--state-dir <path>] [--log-dir <path>] [--config <file>] [--api <file>] [--host <host>] [--port <port>] [--jwt-enabled true|false] [--jwt-issuer <issuer>] [--jwt-audience <audience>] [--jwt-keys <file>] [--jwt-key-id <id>] [--jwt-ttl <seconds>] [--jwt-session-ttl <seconds>] [--state-backend memory|sqlite] [--state-file <file>] [--state-namespace <name>] [--state-max-forms <n>]"
 
 newOptions(applicationName)
     return {
@@ -41,6 +41,10 @@ newOptions(applicationName)
         jwtKeyId: null
         jwtTtl: null
         jwtSessionTtl: null
+        stateBackend: null
+        stateFile: null
+        stateNamespace: null
+        stateMaxForms: null
     }
 
 setOption(options, option, value)
@@ -75,12 +79,21 @@ setOption(options, option, value)
           options.jwtTtl = value
       case "--jwt-session-ttl"
           options.jwtSessionTtl = value
+      case "--state-backend"
+          options.stateBackend = value
+      case "--state-file"
+          options.stateFile = value
+      case "--state-namespace"
+          options.stateNamespace = value
+      case "--state-max-forms"
+          options.stateMaxForms = value
     return options
 
 knownOption(option)
     standard = ["--app-root", "--data-dir", "--state-dir", "--log-dir", "--config", "--api", "--host", "--port"]
     jwt = ["--jwt-enabled", "--jwt-issuer", "--jwt-audience", "--jwt-keys", "--jwt-key-id", "--jwt-ttl", "--jwt-session-ttl"]
-    return standard.includes(option) or jwt.includes(option)
+    state = ["--state-backend", "--state-file", "--state-namespace", "--state-max-forms"]
+    return standard.includes(option) or jwt.includes(option) or state.includes(option)
 
 parseArguments(args)
     if args.length == 0

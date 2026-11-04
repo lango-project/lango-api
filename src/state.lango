@@ -1,0 +1,176 @@
+import js global Date
+import js "node:fs" as fs
+import js "node:path" as path
+import js "node:sqlite" as sqlite
+
+export configureState(configuration)
+export closeOwnedState(configuration)
+
+export class SqliteStateStore
+    methods
+        isRevoked(sessionId)
+        revoke(sessionId, expiresAt)
+        claim(key, seqno, expiresAt)
+        claimLocked(key, seqno, expiresAt)
+        complete(key, seqno)
+        close()
+        isClosed()
+
+SqliteStateStore(file, options = null)
+    if !is_string(file) or file == "" or file == ":memory:"
+        throw "ApiStateFileRequired"
+    if options == null
+        options = {
+        }
+    @namespace = options.namespace
+    if @namespace == null
+        @namespace = "default"
+    if !is_string(@namespace) or @namespace == "" or @namespace.length > 128
+        throw "ApiStateNamespaceRequired"
+    @maxForms = options.maxForms
+    if @maxForms == null
+        @maxForms = 10000
+    if !is_number(@maxForms) or @maxForms < 1 or @maxForms > 9007199254740991 or @maxForms % 1 != 0
+        throw "ApiStateCapacityMustBePositive"
+    file = path.resolve(file)
+    fs.mkdirSync(path.dirname(file), {
+        recursive: true
+        mode: 448
+    })
+    handle = fs.openSync(file, "a", 384)
+    fs.closeSync(handle)
+    db = new sqlite/DatabaseSync(file)
+    @db = db
+    @closed = false
+    try
+        db.exec("PRAGMA busy_timeout = 5000")
+        db.exec("PRAGMA journal_mode = WAL")
+        db.exec("PRAGMA synchronous = FULL")
+        db.exec("CREATE TABLE IF NOT EXISTS lango_revocations (namespace TEXT NOT NULL, session_id TEXT NOT NULL, expires_at REAL NOT NULL, PRIMARY KEY (namespace, session_id))")
+        db.exec("CREATE TABLE IF NOT EXISTS lango_replay (namespace TEXT NOT NULL, stream_key TEXT NOT NULL, seqno INTEGER NOT NULL, expires_at REAL NOT NULL, pending INTEGER NOT NULL, PRIMARY KEY (namespace, stream_key))")
+        db.exec("CREATE INDEX IF NOT EXISTS lango_revocations_expiry ON lango_revocations(namespace, expires_at)")
+        db.exec("CREATE INDEX IF NOT EXISTS lango_replay_expiry ON lango_replay(namespace, expires_at)")
+    catch error
+        this.close()
+        throw error
+
+SqliteStateStore:isRevoked(sessionId)
+    query = @db.prepare("SELECT expires_at FROM lango_revocations WHERE namespace = ? AND session_id = ?")
+    record = query.get(@namespace, sessionId)
+    if record == null
+        return false
+    return record.expires_at > Date/now() / 1000
+
+SqliteStateStore:revoke(sessionId, expiresAt)
+    if !is_string(sessionId) or sessionId == "" or !is_number(expiresAt)
+        throw "ApiStateInvalidRevocation"
+    query = @db.prepare("INSERT INTO lango_revocations(namespace, session_id, expires_at) VALUES (?, ?, ?) ON CONFLICT(namespace, session_id) DO UPDATE SET expires_at = MAX(lango_revocations.expires_at, excluded.expires_at)")
+    query.run(@namespace, sessionId, expiresAt)
+    cleanup = @db.prepare("DELETE FROM lango_revocations WHERE namespace = ? AND expires_at <= ?")
+    cleanup.run(@namespace, Date/now() / 1000)
+    return null
+
+SqliteStateStore:claim(key, seqno, expiresAt)
+    if !is_string(key) or key == "" or !is_number(seqno) or seqno < 1 or seqno > 9007199254740991 or seqno % 1 != 0 or !is_number(expiresAt)
+        throw "ApiStateInvalidReplayClaim"
+    db = @db
+    db.exec("BEGIN IMMEDIATE")
+    try
+        result = this.claimLocked(key, seqno, expiresAt)
+        db.exec("COMMIT")
+        return result
+    catch error
+        db.exec("ROLLBACK")
+        throw error
+
+SqliteStateStore:claimLocked(key, seqno, expiresAt)
+    now = Date/now() / 1000
+    if expiresAt <= now
+        return "Expired"
+    cleanup = @db.prepare("DELETE FROM lango_replay WHERE namespace = ? AND expires_at <= ?")
+    cleanup.run(@namespace, now)
+    query = @db.prepare("SELECT seqno, expires_at, pending FROM lango_replay WHERE namespace = ? AND stream_key = ?")
+    record = query.get(@namespace, key)
+    if record != null
+        if seqno <= record.seqno
+            return "AlreadyConsumed"
+        if record.pending == 1
+            return "InProgress"
+        if record.expires_at > expiresAt
+            expiresAt = record.expires_at
+      else
+          count = @db.prepare("SELECT COUNT(*) AS total FROM lango_replay WHERE namespace = ?")
+          size = count.get(@namespace)
+          if size.total >= @maxForms
+              return "Capacity"
+    update = @db.prepare("INSERT INTO lango_replay(namespace, stream_key, seqno, expires_at, pending) VALUES (?, ?, ?, ?, 1) ON CONFLICT(namespace, stream_key) DO UPDATE SET seqno = excluded.seqno, expires_at = excluded.expires_at, pending = 1")
+    update.run(@namespace, key, seqno, expiresAt)
+    return "Accepted"
+
+SqliteStateStore:complete(key, seqno)
+    update = @db.prepare("UPDATE lango_replay SET pending = 0 WHERE namespace = ? AND stream_key = ? AND seqno = ?")
+    update.run(@namespace, key, seqno)
+    return null
+
+SqliteStateStore:close()
+    if !@closed
+        @db.close()
+        @closed = true
+    return null
+
+SqliteStateStore:isClosed()
+    return @closed
+
+configureState(configuration)
+    store = null
+    if configuration.ownedStateStore != null
+        if configuration.ownedStateStore.isClosed()
+            configuration.stateStore = null
+            configuration.ownedStateStore = null
+            if configuration.tokenService == configuration.configuredJwtService
+                configuration.tokenService = null
+                configuration.configuredJwtService = null
+    settings = configuration.state
+    if configuration.stateStore != null
+        if settings != null and configuration.stateStore != configuration.ownedStateStore
+            throw "ApiStateConflictsWithStore"
+        store = configuration.stateStore
+        if !is_kindof(store.revoke, Function) or !is_kindof(store.isRevoked, Function) or !is_kindof(store.claim, Function) or !is_kindof(store.complete, Function)
+            throw "ApiStateStoreRequired"
+        return configuration
+    if settings == null
+        return configuration
+    backend = settings.backend
+    if backend == null
+        backend = "sqlite"
+    if backend == "memory"
+        return configuration
+    if backend != "sqlite"
+        throw "ApiUnknownStateBackend"
+    if configuration.tokenService != null
+        throw "ApiConfiguredStateConflictsWithTokenService"
+    file = settings.file
+    if file == null
+        file = "runtime.sqlite"
+    if !is_string(file) or file == "" or file == ":memory:"
+        throw "ApiStateFileRequired"
+    if !path.isAbsolute(file)
+        if !is_string(configuration.stateDir) or configuration.stateDir == ""
+            throw "ApiStateDirectoryRequired"
+        file = path.resolve(configuration.stateDir, file)
+    namespace = settings.namespace
+    if namespace == null
+        namespace = configuration.applicationName
+    store = new SqliteStateStore(file, {
+        namespace: namespace
+        maxForms: settings.maxForms
+    })
+    configuration.stateStore = store
+    configuration.ownedStateStore = store
+    return configuration
+
+closeOwnedState(configuration)
+    store = configuration.ownedStateStore
+    if store != null
+        store.close()
+    return null

@@ -13,6 +13,9 @@ import "./authorization"
     resolveAuth(spec, definitions)
 import "./jwt_configuration"
     configureTokenService(configuration)
+import "./state"
+    configureState(configuration)
+    closeOwnedState(configuration)
 import "./lifecycle"
     createLifecycle(spec)
     addLifecycle(handlers, options)
@@ -63,17 +66,28 @@ Host:start()
     if @routes == null
         throw "ApiRoutesNotConfigured"
     configuration = @configuration
-    configureTokenService(configuration)
-    configuration = withXmlLifecycle(configuration, @xmlLifecycle)
     routes = @routes
     targets = routes.slice()
-    for lifecycleTargets(configuration.lifecycle) as target
-        targets.add(target)
-    prepareLinkedPackages(configuration.appRoot, targets)
-    return validateRouteModules(configuration.appRoot, targets).then(()
+    pending = null
+    try
+        configureState(configuration)
+        configureTokenService(configuration)
+        configuration = withXmlLifecycle(configuration, @xmlLifecycle)
+        for lifecycleTargets(configuration.lifecycle) as target
+            targets.add(target)
+        prepareLinkedPackages(configuration.appRoot, targets)
+        pending = validateRouteModules(configuration.appRoot, targets)
+    catch error
+        closeOwnedState(configuration)
+        throw error
+    return pending.then(()
         capture configuration
         capture routes
         return startServer(configuration, routes)
+    ).catch((failure)
+        capture configuration
+        closeOwnedState(configuration)
+        throw failure
     )
 
 mergeLifecycle(base, extra)

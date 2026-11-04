@@ -9,7 +9,7 @@ import "./configuration"
     loadConfiguration(applicationName, configurationFile, paths)
 
 export configureTokenService(configuration)
-export loadTokenService(settings)
+export loadTokenService(settings, revocations = null)
 export decodeKeys(text)
 
 configureTokenService(configuration)
@@ -22,12 +22,12 @@ configureTokenService(configuration)
         return configuration
     if settings.enabled == false
         return configuration
-    service = loadTokenService(settings)
+    service = loadTokenService(settings, configuration.stateStore)
     configuration.tokenService = service
     configuration.configuredJwtService = service
     return configuration
 
-loadTokenService(settings)
+loadTokenService(settings, revocations = null)
     if !is_string(settings.keysFile) or settings.keysFile.trim() == ""
         throw "ApiJwtKeysFileRequired"
     base = settings.keysBaseDir
@@ -47,6 +47,7 @@ loadTokenService(settings)
         keys: keys
         ttlSeconds: settings.ttlSeconds
         sessionTtlSeconds: settings.sessionTtlSeconds
+        revocations: revocations
     })
 
 decodeKeys(text)

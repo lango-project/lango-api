@@ -476,14 +476,76 @@ a shared, durable store:
 All instances serving the same tokens must consult the same store, use the same
 token and session lifetime policies, and observe completed revocations across instances.
 Store errors reject authentication or signing; they never bypass revocation.
-The built-in CLI currently uses the in-memory default; custom stores are
-configured through the library TokenService constructor.
+The CLI can configure SQLite persistence as described below; custom stores can
+also be supplied through the library API.
 
 A revoked token can still be used at `/_lango/start` to recover only `clientId`;
 it never restores the revoked session or its authentication. Browser clients
 should stop old form sessions and bootstrap a new anonymous session after
 logout. `lango-client` implements this flow through `application.logout()`,
 including form disposal, late-response protection, and fresh sequence counters.
+
+### Persistent runtime state
+
+Add a state section to `conf.xml` to persist both session revocations and UI
+sequence reservations:
+
+```xml
+<conf>
+  <state backend="sqlite" file="runtime.sqlite" namespace="shop" maxForms="10000" />
+</conf>
+```
+
+Without state configuration, the existing memory defaults remain. A state
+section defaults to SQLite, `runtime.sqlite`, and 10000 form streams. Its default
+namespace is the application name, or `default` for unnamed library hosts.
+Relative files resolve under the final `stateDir`, including CLI overrides;
+absolute files use the specified path. Missing stateDir for a relative file,
+unknown settings/backends, invalid capacities, and database open/schema errors
+prevent startup. SQLite failure never silently switches to memory. State
+configuration does not enable JWT; configure JWT separately.
+
+| CLI option | Environment variable | XML attribute |
+| --- | --- | --- |
+| `--state-backend memory|sqlite` | `LANGO_STATE_BACKEND` | `backend` |
+| `--state-file` | `LANGO_STATE_FILE` | `file` |
+| `--state-namespace` | `LANGO_STATE_NAMESPACE` | `namespace` |
+| `--state-max-forms` | `LANGO_STATE_MAX_FORMS` | `maxForms` |
+
+Precedence is CLI > environment > XML > defaults. `maxForms` is a positive safe
+integer and applies per namespace. All processes sharing a namespace should
+use the same capacity and token policies. Keep the file and namespace stable
+across restarts; changing or deleting them discards their protection.
+
+Library Hosts accept the same `configuration.state` map. Their configured
+TokenService uses this store for revocation. Auth and endpoint handlers can
+read it through `context state`; it is null when no shared store was configured.
+UI Dispatcher automatically uses the request's state store unless an explicit
+`replayStore` adapter was supplied. A dispatcher created at module load does not
+need a reference to the Host. Host-owned stores close with the HTTP server and
+on startup/preflight failure.
+
+The `./state` entry exports `SqliteStateStore(file, options)` with optional
+`namespace` and `maxForms`. It implements both `isRevoked`/`revoke` and
+`claim`/`complete`. Callers can provide `configuration.stateStore` for a shared
+custom backend, including a remote database. It must implement all four
+methods; the caller owns its lifecycle. With an explicit TokenService, pass
+the same store as its `revocations` option. File-based state configuration and
+an independently constructed TokenService are rejected as ambiguous.
+
+SQLite owns a separate connection and does not replace the application's SQL
+adapter. It uses WAL, full synchronous commits, a five-second busy timeout,
+bound query parameters, and `BEGIN IMMEDIATE` for replay reservations. Multiple
+processes can share one database on the same local filesystem; this is not a
+multi-machine database service. New directories and files request owner-only
+permissions. The database stores identifiers, sequence/expiry values and
+reservation state, not raw JWTs.
+
+Completed sequence records survive restart. A reservation interrupted before
+completion remains pending until its session deadline; it is never reset merely
+because another process opened the database. A repeated sequence stays consumed,
+and higher sequences return `InProgress`. Recovery of uncertain business effects
+and distributed adapters remain separate concerns.
 
 ## Authorization callbacks
 

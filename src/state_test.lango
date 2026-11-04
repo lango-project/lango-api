@@ -1,0 +1,341 @@
+import js global Promise
+import js global Date
+import js global globalThis as host
+import js "node:fs" as fs
+import js "node:path" as path
+import js "node:os" as os
+import js "node:crypto" as crypto
+import js "node:process" as process
+import js "node:child_process" as children
+import "./state"
+    class SqliteStateStore
+    configureState(configuration)
+    closeOwnedState(configuration)
+import "./tokens"
+    class TokenService
+import "./configuration"
+    defaultConfiguration(applicationName)
+    loadConfiguration(applicationName, configurationFile, paths)
+    applyEnvironmentConfiguration(configuration, environment)
+    applyOptionConfiguration(configuration, options)
+import "./cli"
+    parseArguments(args)
+
+export main(args)
+
+main(args)
+    if args[0] == "worker"
+        store = new SqliteStateStore(args[1], {
+            namespace: "workers"
+        })
+        try
+            result = store.claim("same-stream", 1, Date/now() / 1000 + 3600)
+            fs.writeFileSync(args[2], result)
+        finally
+            store.close()
+        return null
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), "lango-state-"))
+    file = path.join(directory, "runtime.sqlite")
+    try
+        checkStores(file)
+        checkConfiguration(directory)
+        checkInvalidConfiguration(directory)
+    catch error
+        fs.rmSync(directory, {
+            recursive: true
+            force: true
+        })
+        throw error
+    return checkTokens(file).then(()
+        capture file
+        return checkWorkers(file)
+    ).finally(()
+        capture directory
+        cleanup(directory)
+    )
+
+cleanup(directory)
+    fs.rmSync(directory, {
+        recursive: true
+        force: true
+    })
+
+checkStores(file)
+    first = new SqliteStateStore(file, {
+        namespace: "store-test"
+        maxForms: 2
+    })
+    second = new SqliteStateStore(file, {
+        namespace: "store-test"
+        maxForms: 2
+    })
+    isolated = new SqliteStateStore(file, {
+        namespace: "other-application"
+    })
+    expiry = Date/now() / 1000 + 3600
+    try
+        first.revoke("session", expiry)
+        first.revoke("session", expiry - 3000)
+        assert second.isRevoked("session")
+        assert !isolated.isRevoked("session")
+        assert first.claim("form", 1, expiry) == "Accepted"
+        assert second.claim("form", 1, expiry) == "AlreadyConsumed"
+        assert second.claim("form", 2, expiry) == "InProgress"
+        first.complete("form", 1)
+        assert second.claim("form", 2, expiry) == "Accepted"
+        first.complete("form", 1)
+        assert first.claim("form", 3, expiry) == "InProgress"
+        second.complete("form", 2)
+        assert first.claim("crashed", 1, expiry) == "Accepted"
+        assert second.claim("third", 1, expiry) == "Capacity"
+        assert isolated.claim("form", 1, expiry) == "Accepted"
+    finally
+        first.close()
+        second.close()
+        isolated.close()
+    reopened = new SqliteStateStore(file, {
+        namespace: "store-test"
+        maxForms: 2
+    })
+    try
+        assert reopened.isRevoked("session")
+        assert reopened.claim("form", 2, expiry) == "AlreadyConsumed"
+        assert reopened.claim("crashed", 1, expiry) == "AlreadyConsumed"
+        assert reopened.claim("crashed", 2, expiry) == "InProgress"
+        checkExpiry(reopened, expiry)
+    finally
+        reopened.close()
+    rejected = false
+    try
+        reopened.isRevoked("session")
+    catch error
+        rejected = true
+    assert rejected
+    println("PASS SQLite state persists revocations, completed sequences and crashed reservations; connections share state and namespaces remain isolated")
+
+checkExpiry(store, expiry)
+    original = host.Date.now
+    frozen = ()
+        capture expiry
+        return (expiry - 2000) * 1000
+    replaceNow(frozen)
+    try
+        assert store.isRevoked("session")
+    finally
+        replaceNow(original)
+    expired = ()
+        capture expiry
+        return (expiry + 1) * 1000
+    replaceNow(expired)
+    try
+        assert !store.isRevoked("session")
+        assert store.claim("form", 3, expiry) == "Expired"
+        assert store.claim("fresh", 1, expiry + 3600) == "Accepted"
+    finally
+        replaceNow(original)
+
+replaceNow(callback)
+    host.Date.now = callback
+
+checkConfiguration(directory)
+    conf = path.join(directory, "conf.xml")
+    fs.writeFileSync(conf, <conf><state file="xml.sqlite" namespace="xml" maxForms="4" /></conf>)
+    configuration = loadConfiguration("shop", conf, {
+        appRoot: directory
+        stateDir: directory
+        dataDir: directory
+        logDir: directory
+    })
+    assert configuration.state.backend == "sqlite"
+    assert configuration.state.maxForms == 4
+    applyEnvironmentConfiguration(configuration, {
+        LANGO_STATE_FILE: "env.sqlite"
+        LANGO_STATE_NAMESPACE: "environment"
+        LANGO_STATE_MAX_FORMS: "5"
+    })
+    options = parseArguments(["shop", "--state-file", "cli.sqlite", "--state-namespace", "cli", "--state-max-forms", "6"])
+    applyOptionConfiguration(configuration, options)
+    assert configuration.state.namespace == "cli"
+    assert configuration.state.maxForms == 6
+    configureState(configuration)
+    assert fs.existsSync(path.join(directory, "cli.sqlite"))
+    owned = configuration.stateStore
+    assert owned.claim("form", 1, Date/now() / 1000 + 3600) == "Accepted"
+    closeOwnedState(configuration)
+    assert owned.isClosed()
+    configureState(configuration)
+    try
+        assert configuration.stateStore != owned
+        assert configuration.stateStore.claim("form", 1, Date/now() / 1000 + 3600) == "AlreadyConsumed"
+    finally
+        closeOwnedState(configuration)
+    memory = defaultConfiguration("memory")
+    applyEnvironmentConfiguration(memory, {
+        LANGO_STATE_BACKEND: "memory"
+    })
+    configureState(memory)
+    assert memory.stateStore == null
+    println("PASS state settings honor XML/environment/CLI precedence, resolve files under stateDir and reopen closed owned resources")
+
+service(store, key)
+    return new TokenService({
+        issuer: "state-test"
+        audience: "state-test"
+        activeKeyId: "current"
+        keys: {
+            current: key
+        }
+        revocations: store
+    })
+
+checkInvalidConfiguration(directory)
+    conf = path.join(directory, "invalid.xml")
+    fs.writeFileSync(conf, <conf><state unexpected="true" /></conf>)
+    try
+        loadConfiguration("shop", conf, {
+        })
+        assert false
+    catch error
+        assert error == "ApiStateUnknownAttribute: unexpected"
+    fs.writeFileSync(conf, <conf><state /><state /></conf>)
+    try
+        loadConfiguration("shop", conf, {
+        })
+        assert false
+    catch error
+        assert error == "ApiDuplicateStateConfiguration"
+    try
+        configureState({
+            state: {
+                backend: "unknown"
+            }
+        })
+        assert false
+    catch error
+        assert error == "ApiUnknownStateBackend"
+    try
+        configureState({
+            state: {
+                backend: "sqlite"
+            }
+        })
+        assert false
+    catch error
+        assert error == "ApiStateDirectoryRequired"
+    corrupt = path.join(directory, "corrupt.sqlite")
+    fs.writeFileSync(corrupt, "not a sqlite database")
+    rejected = false
+    try
+        store = new SqliteStateStore(corrupt)
+        store.close()
+    catch error
+        rejected = true
+    assert rejected
+    println("PASS invalid state configuration and corrupt databases fail without falling back to memory")
+
+checkTokens(file)
+    store = new SqliteStateStore(file, {
+        namespace: "tokens"
+    })
+    key = crypto/randomBytes(32)
+    tokens = service(store, key)
+    return tokens.sign({
+        clientId: "stable-client"
+        sessionId: "revoked-session"
+        auth: true
+    }).then((token)
+        capture tokens
+        capture store
+        capture key
+        capture file
+        return revokeToken(tokens, store, key, file, token)
+    ).finally(()
+        capture store
+        store.close()
+    )
+
+revokeToken(tokens, store, key, file, token)
+    return tokens.verify(token).then((claims)
+        capture tokens
+        return tokens.revoke(claims)
+    ).then(()
+        capture store
+        capture file
+        capture key
+        capture token
+        store.close()
+        return verifyAfterRestart(file, key, token)
+    )
+
+verifyAfterRestart(file, key, token)
+    store = new SqliteStateStore(file, {
+        namespace: "tokens"
+    })
+    tokens = service(store, key)
+    return tokens.verify(token).then((claims)
+        throw "UnexpectedRevokedTokenAcceptance"
+    ).catch((error)
+        assert error == "ApiInvalidToken"
+    ).then(()
+        capture tokens
+        capture token
+        return tokens.restart(token)
+    ).then((claims)
+        assert claims.clientId == "stable-client"
+        assert claims.sessionId != "revoked-session"
+        assert !claims.auth
+        println("PASS a revoked JWT remains invalid after reopening the database while bootstrap still recovers only client identity")
+    ).finally(()
+        capture store
+        store.close()
+    )
+
+checkWorkers(file)
+    return Promise/all([worker(file), worker(file)]).then((results)
+        accepted = 0
+        consumed = 0
+        for results as result
+            if result == "Accepted"
+                accepted++
+            if result == "AlreadyConsumed"
+                consumed++
+        if accepted != 1 or consumed != 1
+            throw "UnexpectedStateWorkerResults: ${to_json(results)}"
+        println("PASS two independent processes can reserve the same SQLite stream only once")
+    )
+
+worker(file)
+    pending = new Promise((resolve, reject)
+        capture file
+        launchWorker(file, resolve, reject)
+    )
+    return pending
+
+launchWorker(file, resolve, reject)
+    id = crypto/randomUUID()
+    output = path.join(path.dirname(file), "worker-${id}.txt")
+    completion = {
+        resolve: resolve
+        reject: reject
+        output: output
+    }
+    child = children/spawn(process.execPath, [process.argv[1], "worker", file, output], {
+        stdio: "ignore"
+    })
+    child.once("error", (error)
+        capture completion
+        completion.reject(error)
+    )
+    child.once("close", (code)
+        capture completion
+        workerFinished(completion, code)
+    )
+
+workerFinished(completion, code)
+    if code != 0
+        completion.reject("StateWorkerFailed: ${code}")
+        return null
+    try
+        completion.resolve(fs.readFileSync(completion.output, "utf8"))
+    catch error
+        completion.reject(error)

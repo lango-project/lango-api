@@ -18,6 +18,8 @@ import "./request_audit"
 import "./ping"
     processPing(configuration, input)
     isPingRequest(configuration, path)
+import "./state"
+    closeOwnedState(configuration)
 
 
 export start(configuration, routes)
@@ -308,6 +310,7 @@ start(configuration, routes)
         context request = apiRequest
         context response = apiResponse
         context token = apiToken
+        context state = configuration.stateStore
         observeRequest(configuration, httpResponse)
         if httpRequest.method != "POST"
             requestLog.warn("${apiRequest.method} ${apiRequest.path}: method is not allowed")
@@ -354,6 +357,7 @@ start(configuration, routes)
             capture log
             capture body
             capture authorization
+            capture state
             input = {
             }
             try
@@ -372,7 +376,15 @@ start(configuration, routes)
     )
     server.on("error", (error)
         capture log
+        capture configuration
+        capture server
         log.err("HTTP server error")
+        if !server.listening
+            closeOwnedState(configuration)
+    )
+    server.once("close", ()
+        capture configuration
+        closeOwnedState(configuration)
     )
     server.listen(configuration.port, configuration.host)
     return server
@@ -404,6 +416,7 @@ processRequest(configuration, route, input, authorization)
     context request
     context response
     context log
+    context state
     if route.ping == true
         return processPing(configuration, input)
     return Promise/resolve().then(()
@@ -413,6 +426,7 @@ processRequest(configuration, route, input, authorization)
         capture request
         capture response
         capture log
+        capture state
         return authenticate(configuration, authorization, route)
     ).then((claims)
         capture configuration
@@ -421,6 +435,7 @@ processRequest(configuration, route, input, authorization)
         capture request
         capture response
         capture log
+        capture state
         return dispatchRequest(claims, route, input, configuration)
     ).catch((error)
         capture request
@@ -472,6 +487,7 @@ dispatchRequest(claims, route, input, configuration)
     context request
     context response
     context log
+    context state
     if claims == null or response.completed()
         return null
     context token = claims
@@ -497,6 +513,7 @@ dispatchRequest(claims, route, input, configuration)
         capture response
         capture token
         capture log
+        capture state
         if allowed and !response.completed()
             response.restoreTokenIdentity()
             return invokeRoute(route, input, appRoot)
@@ -507,6 +524,7 @@ authorizeRoute(route, input, appRoot)
     context response
     context token
     context log
+    context state
     if route.auth == null
         return Promise/resolve(true)
     return Promise/resolve().then(()
@@ -517,6 +535,7 @@ authorizeRoute(route, input, appRoot)
         capture response
         capture token
         capture log
+        capture state
         return callAuth(route.auth, input, appRoot)
     ).then((allowed)
         capture request
@@ -547,6 +566,7 @@ callAuth(auth, input, appRoot)
     context response
     context token
     context log
+    context state
     if is_kindof(auth.function, Function)
         return auth.function(request.path, input)
     if is_string(auth.module)
@@ -558,6 +578,7 @@ callAuth(auth, input, appRoot)
             capture response
             capture token
             capture log
+            capture state
             return invokeAuthModule(module, auth.function, input)
         )
     return invokeAuthModule(auth.module, auth.function, input)
@@ -587,6 +608,7 @@ invokeRoute(route, input, appRoot)
     context response
     context token
     context log
+    context state
     try
         if not routeMissing(route.handler)
             handlerResult = route.handler(input)
@@ -603,6 +625,7 @@ invokeRoute(route, input, appRoot)
             capture response
             capture token
             capture log
+            capture state
             importedResult = module[route.func](input)
             return sendResult(response, log, request, importedResult)
         ).catch((error)

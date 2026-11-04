@@ -12,7 +12,8 @@
   },
   "exports": {
     ".": "./dist/library.mjs",
-    "./tokens": "./dist/tokens.mjs"
+    "./tokens": "./dist/tokens.mjs",
+    "./state": "./dist/state.mjs"
   },
   "lango": {
     "source": "src/cli.lango",
@@ -29,13 +30,14 @@
   ],
   "scripts": {
     "build": "lango build src/cli.lango --out dist/cli.mjs --executable && lango build src/tokens.lango --out dist/tokens.mjs",
-    "test": "lango test src/cli.lango --build-dir .test-output/source && npm run test:tokens && npm run test:http && npm run test:ping && npm run test:revocation",
+    "test": "lango test src/cli.lango --build-dir .test-output/source && npm run test:tokens && npm run test:http && npm run test:ping && npm run test:revocation && npm run test:state",
     "test:tokens": "lango build src/tokens_test.lango --out .test-output/tokens_test.mjs --executable && node .test-output/tokens_test.mjs && lango build src/session_lifetime_test.lango --out .test-output/session_lifetime_test.mjs --executable && node .test-output/session_lifetime_test.mjs",
     "test:http": "lango build src/auth_http_test.lango --out .test-output/auth_http_test.mjs --executable && node .test-output/auth_http_test.mjs && npm run test:lifecycle",
     "test:lifecycle": "lango build src/lifecycle_http_test.lango --out .test-output/lifecycle_http_test.mjs --executable && node .test-output/lifecycle_http_test.mjs && npm run test:audit",
     "test:audit": "lango build src/request_audit_test.lango --out .test-output/request_audit_test.mjs --executable && node .test-output/request_audit_test.mjs",
     "test:ping": "lango build src/ping_test.lango --out .test-output/ping_test.mjs --executable && node .test-output/ping_test.mjs",
-    "test:revocation": "lango build src/revocation_test.lango --out .test-output/revocation_test.mjs --executable && node .test-output/revocation_test.mjs"
+    "test:revocation": "lango build src/revocation_test.lango --out .test-output/revocation_test.mjs --executable && node .test-output/revocation_test.mjs",
+    "test:state": "lango build src/state_test.lango --out .test-output/state_test.mjs --executable && node .test-output/state_test.mjs && lango build src/state_http_test.lango --out .test-output/state_http_test.mjs --executable && node .test-output/state_http_test.mjs"
   },
   "devDependencies": {
     "@lango-project/lango-js": "^0.1.8"
