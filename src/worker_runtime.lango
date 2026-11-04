@@ -38,9 +38,11 @@ WorkerRuntime(configuration, factory)
     })
     @closed = false
     try
+        @tokens = null
         settings = configuration.tokens
-        settings.revocations = @store
-        @tokens = new SyncTokenService(settings)
+        if settings != null
+            settings.revocations = @store
+            @tokens = new SyncTokenService(settings)
         context state = @store
         definition = requireSync(factory(configuration.options))
         if !is_object(definition) or !is_array(definition.routes)
@@ -53,8 +55,9 @@ WorkerRuntime(configuration, factory)
             if hook != null
                 requireHook(hook)
         for @routes as route
-            if route.path == "/_lango/start" or route.path == "/_lango/logout" or route.path == "/_lango/ping"
-                throw "ApiWorkerReservedPath"
+            if @tokens != null
+                if route.path == "/_lango/start" or route.path == "/_lango/logout" or route.path == "/_lango/ping"
+                    throw "ApiWorkerReservedPath"
             requireTarget(route)
             if route.auth != null
                 requireHook(route.auth)
@@ -120,8 +123,8 @@ WorkerRuntime:begin(raw, reply)
 WorkerRuntime:dispatch(task, reply)
     context request
     route = findRoute(@routes, request.path)
-    bootstrap = request.path == "/_lango/start"
-    logout = request.path == "/_lango/logout"
+    bootstrap = @tokens != null and request.path == "/_lango/start"
+    logout = @tokens != null and request.path == "/_lango/logout"
     if route == null and !bootstrap and !logout
         return reply.failure(404, "RouteNotFound")
     input = null
@@ -129,28 +132,33 @@ WorkerRuntime:dispatch(task, reply)
         input = from_json(task.body)
     catch error
         return reply.failure(400, "BadRequest")
-    raw = null
-    try
-        raw = bearer(task.request.headers.authorization)
-    catch error
-        return reply.failure(401, "Unauthorized")
-    claims = null
-    if bootstrap
-        claims = begin(raw, reply)
-      else
-          if raw == null
-              if logout or route.anonymous != true
-                  return reply.failure(401, "Unauthorized")
-              claims = begin(null, reply)
-            else
-                try
-                    claims = @tokens.verify(raw)
-                catch error
-                    return reply.failure(401, "Unauthorized")
+    claims = {
+        auth: false
+    }
+    if @tokens != null
+        raw = null
+        try
+            raw = bearer(task.request.headers.authorization)
+        catch error
+            return reply.failure(401, "Unauthorized")
+        claims = null
+        if bootstrap
+            claims = begin(raw, reply)
+          else
+              if raw == null
+                  if logout or route.anonymous != true
+                      return reply.failure(401, "Unauthorized")
+                  claims = begin(null, reply)
+                else
+                    try
+                        claims = @tokens.verify(raw)
+                    catch error
+                        return reply.failure(401, "Unauthorized")
     if reply.completed()
         return null
     context token = claims
-    reply.bindToken(claims)
+    if @tokens != null
+        reply.bindToken(claims)
     if bootstrap
         return reply.send({
             clientId: claims.clientId
@@ -161,7 +169,7 @@ WorkerRuntime:dispatch(task, reply)
         return reply.send({
             loggedOut: true
         })
-    if route.anonymous != true and claims.auth != true
+    if @tokens != null and route.anonymous != true and claims.auth != true
         return reply.failure(401, "Unauthorized")
     if route.auth != null
         allowed = invokeHook(route.auth, input)
@@ -291,7 +299,7 @@ WorkerResponse:completed()
 WorkerResponse:logout()
     if @completed
         throw "ApiResponseAlreadySent"
-    if @claims == null
+    if @service == null or @claims == null
         throw "ApiTokenSessionRequired"
     if !@loggedOut
         @service.revoke(@original)
@@ -315,7 +323,7 @@ WorkerResponse:result()
     if !@completed
         send(null)
     restoreIdentity()
-    if @sentClaims != null and !@loggedOut
+    if @service != null and @sentClaims != null and !@loggedOut
         try
             renewed = @service.sign(@sentClaims)
             @headers["X-Lango-Token"] = renewed

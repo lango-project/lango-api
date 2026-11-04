@@ -31,6 +31,7 @@ WorkerHost(configuration)
     @configuration = configuration
     @closing = null
     @stopping = false
+    @shutdown = null
     @maxQueue = positiveOption(configuration.maxQueue, 64)
     @bodyLimit = positiveOption(configuration.bodyLimit, 1048576)
     threads = positiveOption(configuration.threads, 2)
@@ -70,6 +71,9 @@ WorkerHost(configuration)
         receive(req, res)
     )
     @server = server
+    server.once("close", ()
+        stopPool()
+    )
 
 positiveOption(value, fallback)
     if value == null
@@ -97,7 +101,9 @@ WorkerHost:start()
         )
         return listening
     ).catch((error)
-        return @pool.destroy().then(()
+        @stopping = true
+        @shutdown = @pool.destroy()
+        return @shutdown.then(()
             capture error
             throw error
         )
@@ -204,14 +210,26 @@ WorkerHost:close()
               )
               server.close()
     )
-    @closing = closePool(drained, @pool)
+    closing = drained.then(()
+        return stopPool()
+    )
+    @closing = closing
     return @closing
 
-closePool(drained, pool)
-    return drained.then(()
-        capture pool
-        return pool.close()
-    ).catch((error)
+WorkerHost:stopPool()
+    if @shutdown != null
+        return @shutdown
+    @stopping = true
+    pending = closePool(@pool)
+    @shutdown = pending
+    pending.catch((error)
+        context log
+        log.err("Worker pool shutdown failed")
+    )
+    return pending
+
+closePool(pool)
+    return pool.close().catch((error)
         capture pool
         return pool.destroy().then(()
             capture error

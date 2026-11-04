@@ -1,0 +1,190 @@
+import js "node:fs" as fs
+import js "node:path" as path
+import js "node:os" as os
+import "./configuration"
+    workersEnabled(configuration)
+    validateWorkers(configuration)
+import "./jwt_configuration"
+    loadTokenOptions(settings, revocations = null)
+
+export workerConfiguration(configuration)
+
+workerConfiguration(configuration)
+    validateWorkers(configuration)
+    if !workersEnabled(configuration)
+        return null
+    if !is_string(configuration.appRoot) or configuration.appRoot == ""
+        throw "ApiAppRootMustBeConfigured"
+    if configuration.tokenService != null or configuration.stateStore != null
+        throw "ApiWorkerInstancesMustBeCreatedInFactory"
+    if configuration.lifecycle != null
+        for configuration.lifecycle as name: handler
+            if handler != null
+                throw "ApiWorkerLifecycleMustBeCreatedInFactory"
+    settings = configuration.workers
+    appRoot = path.resolve(configuration.appRoot)
+    application = path.resolve(appRoot, settings.application)
+    if !fs.existsSync(application)
+        throw "ApiWorkerApplicationNotFound: ${application}"
+    state = configuration.state
+    if state == null
+        state = {
+        }
+    if state.backend != null and state.backend != "sqlite"
+        throw "ApiWorkersRequireSqliteState"
+    file = state.file
+    if file == null
+        file = "runtime.sqlite"
+    if !is_string(file) or file == "" or file == ":memory:"
+        throw "ApiStateFileRequired"
+    if !path.isAbsolute(file)
+        if !is_string(configuration.stateDir) or configuration.stateDir == ""
+            throw "ApiStateDirectoryRequired"
+        file = path.resolve(configuration.stateDir, file)
+    namespace = state.namespace
+    if namespace == null
+        namespace = configuration.applicationName
+    tokens = null
+    if configuration.jwt != null
+        if configuration.jwt.enabled != false
+            tokens = loadTokenOptions(configuration.jwt)
+    workerFile = null
+    if settings.workerFile != null
+        workerFile = path.resolve(appRoot, settings.workerFile)
+    options = factoryOptions(configuration, appRoot, settings)
+    return {
+        appRoot: appRoot
+        application: application
+        workerFile: workerFile
+        stateFile: file
+        namespace: namespace
+        maxForms: state.maxForms
+        host: configuration.host
+        port: configuration.port
+        threads: settings.threads
+        maxQueue: settings.maxQueue
+        bodyLimit: settings.bodyLimit
+        tokens: tokens
+        options: options
+    }
+
+factoryOptions(configuration, appRoot, settings)
+    options = {
+        applicationName: configuration.applicationName
+        appRoot: appRoot
+        dataDir: configuration.dataDir
+        stateDir: configuration.stateDir
+        logDir: configuration.logDir
+    }
+    extra = settings.options
+    if settings.optionsFile != null
+        file = path.resolve(appRoot, settings.optionsFile)
+        if !fs.existsSync(file)
+            throw "ApiWorkerOptionsFileNotFound: ${file}"
+        try
+            extra = from_json(fs.readFileSync(file, "utf8"))
+        catch error
+            throw "ApiWorkerOptionsFileMustBeJsonMap: ${file}"
+        if !is_object(extra)
+            throw "ApiWorkerOptionsFileMustBeJsonMap: ${file}"
+    if extra != null
+        for extra as name: value
+            if name == "__proto__" or name == "constructor" or name == "prototype"
+                throw "ApiWorkerReservedOptionName"
+            options[name] = value
+    return options
+
+test "worker configuration resolves application options keys and SQLite against final paths"
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), "lango-worker-settings-"))
+    appRoot = path.join(directory, "application")
+    confRoot = path.join(directory, "configuration")
+    fs.mkdirSync(path.join(appRoot, "dist"), {
+        recursive: true
+    })
+    fs.mkdirSync(confRoot)
+    fs.writeFileSync(path.join(appRoot, "dist", "worker.mjs"), "")
+    fs.writeFileSync(path.join(appRoot, "options.json"), to_json({
+        label: "from-file"
+    }))
+    fs.writeFileSync(path.join(confRoot, "keys.json"), to_json({
+        current: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    }))
+    configuration = {
+        applicationName: "shop"
+        appRoot: appRoot
+        stateDir: path.join(directory, "state")
+        dataDir: path.join(directory, "data")
+        logDir: path.join(directory, "logs")
+        host: "127.0.0.1"
+        port: 3000
+        workers: {
+            optionsFile: "options.json"
+        }
+        jwt: {
+            issuer: "shop"
+            audience: "browser"
+            activeKeyId: "current"
+            keysFile: "keys.json"
+            keysBaseDir: confRoot
+        }
+    }
+    try
+        settings = workerConfiguration(configuration)
+        assert settings.application == path.join(appRoot, "dist", "worker.mjs")
+        assert settings.stateFile == path.join(directory, "state", "runtime.sqlite")
+        assert settings.namespace == "shop"
+        assert settings.threads == 2
+        assert settings.options.label == "from-file"
+        assert settings.options.appRoot == appRoot
+        assert settings.options.stateDir == configuration.stateDir
+        assert settings.tokens.keys.current.length == 32
+        assert !fs.existsSync(configuration.stateDir)
+        configuration.state = {
+            backend: "memory"
+        }
+        try
+            workerConfiguration(configuration)
+            assert false
+        catch error
+            assert error == "ApiWorkersRequireSqliteState"
+        configuration.state = null
+        configuration.jwt.enabled = false
+        configuration.jwt.keysFile = "missing.json"
+        anonymous = workerConfiguration(configuration)
+        assert anonymous.tokens == null
+        configuration.workers.enabled = false
+        configuration.workers.application = "missing.mjs"
+        configuration.workers.optionsFile = "missing.json"
+        assert workerConfiguration(configuration) == null
+    finally
+        fs.rmSync(directory, {
+            recursive: true
+            force: true
+        })
+
+test "worker configuration rejects parent process instances and lifecycle callbacks"
+    configuration = {
+        appRoot: "/missing"
+        workers: {
+            enabled: true
+        }
+        tokenService: {
+        }
+    }
+    try
+        workerConfiguration(configuration)
+        assert false
+    catch error
+        assert error == "ApiWorkerInstancesMustBeCreatedInFactory"
+    configuration.tokenService = null
+    configuration.lifecycle = {
+        register: workerHook
+    }
+    try
+        workerConfiguration(configuration)
+        assert false
+    catch error
+        assert error == "ApiWorkerLifecycleMustBeCreatedInFactory"
+
+workerHook(input)
+    return null

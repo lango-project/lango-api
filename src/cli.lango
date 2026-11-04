@@ -1,6 +1,6 @@
 import js "node:os" as os
 import js "node:path" as path
-import js "node:process" as process
+import js global process
 import js "node:fs" as fs
 import "./application_paths"
     developmentPaths(applicationName, home, localAppData, platform)
@@ -10,6 +10,7 @@ import "./configuration"
     applyOptionConfiguration(configuration, options)
     loadConfiguration(applicationName, configurationFile, paths)
     validateConfiguration(configuration)
+    workersEnabled(configuration)
 import "./library"
     class Host
 
@@ -20,7 +21,7 @@ export configurationFileFor(paths, options, environment)
 export apiFileFor(configuration, options, environment)
 
 usage()
-    return "Usage: lango-api <app> [development|server] [--app-root <path>] [--data-dir <path>] [--state-dir <path>] [--log-dir <path>] [--config <file>] [--api <file>] [--host <host>] [--port <port>] [--jwt-enabled true|false] [--jwt-issuer <issuer>] [--jwt-audience <audience>] [--jwt-keys <file>] [--jwt-key-id <id>] [--jwt-ttl <seconds>] [--jwt-session-ttl <seconds>] [--state-backend memory|sqlite] [--state-file <file>] [--state-namespace <name>] [--state-max-forms <n>]"
+    return "Usage: lango-api <app> [development|server] [--app-root <path>] [--data-dir <path>] [--state-dir <path>] [--log-dir <path>] [--config <file>] [--api <file>] [--host <host>] [--port <port>] [--jwt-enabled true|false] [--jwt-issuer <issuer>] [--jwt-audience <audience>] [--jwt-keys <file>] [--jwt-key-id <id>] [--jwt-ttl <seconds>] [--jwt-session-ttl <seconds>] [--state-backend memory|sqlite] [--state-file <file>] [--state-namespace <name>] [--state-max-forms <n>] [--workers true|false] [--worker-application <file>] [--worker-threads <n>] [--worker-max-queue <n>] [--worker-body-limit <bytes>] [--worker-entry <file>] [--worker-options <file>]"
 
 newOptions(applicationName)
     return {
@@ -45,10 +46,31 @@ newOptions(applicationName)
         stateFile: null
         stateNamespace: null
         stateMaxForms: null
+        workersEnabled: null
+        workerApplication: null
+        workerThreads: null
+        workerMaxQueue: null
+        workerBodyLimit: null
+        workerEntry: null
+        workerOptions: null
     }
 
 setOption(options, option, value)
     switch option
+      case "--workers"
+          options.workersEnabled = value
+      case "--worker-application"
+          options.workerApplication = value
+      case "--worker-threads"
+          options.workerThreads = value
+      case "--worker-max-queue"
+          options.workerMaxQueue = value
+      case "--worker-body-limit"
+          options.workerBodyLimit = value
+      case "--worker-entry"
+          options.workerEntry = value
+      case "--worker-options"
+          options.workerOptions = value
       case "--app-root"
           options.appRoot = value
       case "--data-dir"
@@ -93,7 +115,8 @@ knownOption(option)
     standard = ["--app-root", "--data-dir", "--state-dir", "--log-dir", "--config", "--api", "--host", "--port"]
     jwt = ["--jwt-enabled", "--jwt-issuer", "--jwt-audience", "--jwt-keys", "--jwt-key-id", "--jwt-ttl", "--jwt-session-ttl"]
     state = ["--state-backend", "--state-file", "--state-namespace", "--state-max-forms"]
-    return standard.includes(option) or jwt.includes(option) or state.includes(option)
+    workers = ["--workers", "--worker-application", "--worker-threads", "--worker-max-queue", "--worker-body-limit", "--worker-entry", "--worker-options"]
+    return standard.includes(option) or jwt.includes(option) or state.includes(option) or workers.includes(option)
 
 parseArguments(args)
     if args.length == 0
@@ -160,12 +183,18 @@ main(args)
         applyEnvironmentConfiguration(configuration, process.env)
         applyOptionConfiguration(configuration, options)
         validateConfiguration(configuration)
-        apiFile = apiFileFor(configuration, options, process.env)
         host = new Host(configuration)
-        host.routesFromXml(apiFile)
+        if workersEnabled(configuration)
+            if options.apiFile != null or is_string(process.env.LANGO_API) or configuration.apiFile != null
+                throw "ApiWorkerRoutesMustBeCreatedInFactory"
+          else
+              apiFile = apiFileFor(configuration, options, process.env)
+              host.routesFromXml(apiFile)
         return host.start().then((server)
             capture configuration
             capture log
+            capture host
+            installShutdown(host)
             log.info("lango-api listening on ${configuration.host}:${configuration.port}")
             return server
         ).catch((error)
@@ -224,3 +253,38 @@ test "CLI derives api.xml after app-root overrides"
     assert apiFileFor(configuration, options, {
         LANGO_API: "/environment/api.xml"
     }) == "/cli/api.xml"
+
+installShutdown(host)
+    process.once("SIGINT", ()
+        capture host
+        shutdown(host)
+    )
+    process.once("SIGTERM", ()
+        capture host
+        shutdown(host)
+    )
+    return null
+
+shutdown(host)
+    host.close().catch((error)
+        startupFailed(error)
+    )
+    return null
+
+test "CLI parses worker settings and requires explicit values"
+    options = parseArguments(["shop", "--workers", "true", "--worker-application", "dist/worker.mjs", "--worker-threads", "4", "--worker-max-queue", "32", "--worker-body-limit", "8192", "--worker-entry", "dist/entry.mjs", "--worker-options", "worker.json"])
+    assert options.workersEnabled == "true"
+    assert options.workerApplication == "dist/worker.mjs"
+    assert options.workerThreads == "4"
+    assert options.workerMaxQueue == "32"
+    assert options.workerBodyLimit == "8192"
+    assert options.workerEntry == "dist/entry.mjs"
+    assert options.workerOptions == "worker.json"
+    for ["--workers", "--worker-application", "--worker-threads", "--worker-max-queue", "--worker-body-limit", "--worker-entry", "--worker-options"] as option
+        rejected = false
+        try
+            parseArguments(["shop", option, "--port", "3000"])
+        catch error
+            assert error == "ApiOptionRequiresValue: ${option}"
+            rejected = true
+        assert rejected

@@ -11,6 +11,7 @@ import "./configuration"
 export configureTokenService(configuration)
 export loadTokenService(settings, revocations = null)
 export decodeKeys(text)
+export loadTokenOptions(settings, revocations = null)
 
 configureTokenService(configuration)
     settings = configuration.jwt
@@ -28,6 +29,9 @@ configureTokenService(configuration)
     return configuration
 
 loadTokenService(settings, revocations = null)
+    return new TokenService(loadTokenOptions(settings, revocations))
+
+loadTokenOptions(settings, revocations = null)
     if !is_string(settings.keysFile) or settings.keysFile.trim() == ""
         throw "ApiJwtKeysFileRequired"
     base = settings.keysBaseDir
@@ -40,7 +44,7 @@ loadTokenService(settings, revocations = null)
     catch error
         throw "ApiJwtKeysFileUnreadable: ${file}"
     keys = decodeKeys(text)
-    return new TokenService({
+    return {
         issuer: settings.issuer
         audience: settings.audience
         activeKeyId: settings.activeKeyId
@@ -48,7 +52,7 @@ loadTokenService(settings, revocations = null)
         ttlSeconds: settings.ttlSeconds
         sessionTtlSeconds: settings.sessionTtlSeconds
         revocations: revocations
-    })
+    }
 
 decodeKeys(text)
     encoded = null

@@ -1,4 +1,4 @@
-import js "@lango-project/lango-api/workers" as workers
+import js "@lango-project/lango-api" as api
 import js "node:path" as path
 import js "node:fs" as fs
 import js "node:crypto" as crypto
@@ -12,30 +12,33 @@ main(args)
         recursive: true
         mode: 448
     })
-    keyFile = path.join(directory, "jwt.key")
+    keyFile = path.join(directory, "keys.json")
     if !fs.existsSync(keyFile)
-        fs.writeFileSync(keyFile, crypto/randomBytes(32), {
+        key = crypto/randomBytes(32)
+        legacy = path.join(directory, "jwt.key")
+        if fs.existsSync(legacy)
+            key = fs.readFileSync(legacy)
+        fs.writeFileSync(keyFile, to_json({
+            current: key.toString("base64")
+        }), {
             mode: 384
             flag: "wx"
         })
-    host = new workers/WorkerHost({
+    host = new api/Host({
+        applicationName: "worker-demo"
         appRoot: path.resolve(".")
-        application: path.resolve("dist/worker-demo-app.mjs")
-        stateFile: path.join(directory, "runtime.sqlite")
-        namespace: "worker-demo"
+        stateDir: directory
         host: "127.0.0.1"
         port: 8081
-        threads: 2
-        maxQueue: 64
-        tokens: {
+        workers: {
+            application: "dist/worker-demo-app.mjs"
+            threads: 2
+        }
+        jwt: {
             issuer: "worker-demo"
             audience: "worker-demo"
             activeKeyId: "current"
-            keys: {
-                current: fs.readFileSync(keyFile)
-            }
-        }
-        options: {
+            keysFile: keyFile
         }
     })
     process.once("SIGINT", ()

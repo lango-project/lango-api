@@ -1,0 +1,38 @@
+import js "node:worker_threads" as threads
+import "./library"
+    class Routes
+
+export createWorker(options)
+
+global settings = null
+
+createWorker(options)
+    global settings
+    settings = options
+    routes = new Routes()
+    routes.endpoint({
+        path: "/info"
+        function: info
+        anonymous: true
+    })
+    return {
+        routes: routes.values()
+    }
+
+info(input)
+    global settings
+    context request
+    context token
+    context state
+    context log
+    assert !state.isClosed()
+    return {
+        threadId: threads.threadId
+        label: settings.label
+        appRoot: settings.appRoot
+        stateDir: settings.stateDir
+        applicationName: settings.applicationName
+        clientId: token.clientId
+        auth: token.auth
+        path: request.path
+    }

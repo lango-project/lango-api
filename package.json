@@ -33,7 +33,7 @@
   ],
   "scripts": {
     "build": "lango build src/cli.lango --out dist/cli.mjs --executable && lango build src/tokens.lango --out dist/tokens.mjs && lango build src/worker_host.lango --out dist/worker_host.mjs && lango build src/worker_entry.lango --out dist/worker_entry.mjs",
-    "test": "lango test src/cli.lango --build-dir .test-output/source && npm run test:tokens && npm run test:http && npm run test:ping && npm run test:revocation && npm run test:state",
+    "test": "lango test src/cli.lango --build-dir .test-output/source && npm run test:tokens && npm run test:http && npm run test:ping && npm run test:revocation && npm run test:state && npm run test:worker-host",
     "test:tokens": "lango build src/tokens_test.lango --out .test-output/tokens_test.mjs --executable && node .test-output/tokens_test.mjs && lango build src/session_lifetime_test.lango --out .test-output/session_lifetime_test.mjs --executable && node .test-output/session_lifetime_test.mjs && lango build src/sync_tokens_test.lango --out .test-output/sync_tokens_test.mjs --executable && node .test-output/sync_tokens_test.mjs",
     "test:http": "lango build src/auth_http_test.lango --out .test-output/auth_http_test.mjs --executable && node .test-output/auth_http_test.mjs && npm run test:lifecycle",
     "test:lifecycle": "lango build src/lifecycle_http_test.lango --out .test-output/lifecycle_http_test.mjs --executable && node .test-output/lifecycle_http_test.mjs && npm run test:audit",
@@ -43,7 +43,8 @@
     "test:state": "lango build src/state_test.lango --out .test-output/state_test.mjs --executable && node .test-output/state_test.mjs && lango build src/state_http_test.lango --out .test-output/state_http_test.mjs --executable && node .test-output/state_http_test.mjs",
     "test:workers": "npm run build && lango build ../lango-ui/src/library.lango --out ../lango-ui/dist/library.mjs && lango build src/worker_fixture.lango --out .test-output/worker_fixture.mjs && lango build src/worker_http_test.lango --out .test-output/worker_http_test.mjs --executable && node .test-output/worker_http_test.mjs",
     "build:worker-demo": "npm run build && lango build examples/worker-app.lango --out dist/worker-demo-app.mjs && lango build examples/worker-server.lango --out dist/worker-demo-server.mjs --executable",
-    "demo:workers": "node dist/worker-demo-server.mjs"
+    "demo:workers": "node dist/worker-demo-server.mjs",
+    "test:worker-host": "lango build src/cli.lango --out .test-output/worker-cli.mjs --executable && lango build src/worker_entry.lango --out .test-output/worker_entry.mjs && lango build src/worker_config_fixture.lango --out .test-output/worker_config_fixture.mjs && lango build src/worker_host_test.lango --out .test-output/worker_host_test.mjs --executable && node .test-output/worker_host_test.mjs"
   },
   "devDependencies": {
     "@lango-project/lango-js": "^0.1.8"

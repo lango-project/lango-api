@@ -7,6 +7,8 @@ export loadConfiguration(applicationName, configurationFile, paths)
 export applyEnvironmentConfiguration(configuration, environment)
 export applyOptionConfiguration(configuration, options)
 export validateConfiguration(configuration)
+export workersEnabled(configuration)
+export validateWorkers(configuration)
 
 parsePort(value)
     try
@@ -24,6 +26,7 @@ defaultConfiguration(applicationName)
         port: 3000
         jwt: null
         state: null
+        workers: null
     }
 
 applyXmlConfiguration(configuration, xml)
@@ -32,7 +35,13 @@ applyXmlConfiguration(configuration, xml)
         throw "ApiConfigurationRootMustBeConf"
     jwtSeen = false
     stateSeen = false
+    workersSeen = false
     for conf.children() as child
+        if child.tag() == "workers"
+            if workersSeen
+                throw "ApiDuplicateWorkersConfiguration"
+            workersSeen = true
+            applyXmlWorkers(configuration, child)
         if child.tag() == "jwt"
             if jwtSeen
                 throw "ApiDuplicateJwtConfiguration"
@@ -147,6 +156,18 @@ loadConfiguration(applicationName, configurationFile, paths)
     return configuration
 
 applyEnvironmentConfiguration(configuration, environment)
+    workers = {
+        LANGO_WORKERS: "enabled"
+        LANGO_WORKER_APPLICATION: "application"
+        LANGO_WORKER_THREADS: "threads"
+        LANGO_WORKER_MAX_QUEUE: "maxQueue"
+        LANGO_WORKER_BODY_LIMIT: "bodyLimit"
+        LANGO_WORKER_ENTRY: "workerFile"
+        LANGO_WORKER_OPTIONS: "optionsFile"
+    }
+    for workers as variable: name
+        if is_string(environment[variable])
+            setWorker(configuration, name, environment[variable])
     state = {
         LANGO_STATE_BACKEND: "backend"
         LANGO_STATE_FILE: "file"
@@ -185,6 +206,18 @@ applyEnvironmentConfiguration(configuration, environment)
     return configuration
 
 applyOptionConfiguration(configuration, options)
+    workers = {
+        workersEnabled: "enabled"
+        workerApplication: "application"
+        workerThreads: "threads"
+        workerMaxQueue: "maxQueue"
+        workerBodyLimit: "bodyLimit"
+        workerEntry: "workerFile"
+        workerOptions: "optionsFile"
+    }
+    for workers as option: name
+        if options[option] != null
+            setWorker(configuration, name, options[option])
     state = {
         stateBackend: "backend"
         stateFile: "file"
@@ -228,6 +261,7 @@ validateConfiguration(configuration)
     if !is_string(configuration.host) or configuration.host == ""
         throw "ApiHostMustBeConfigured"
     configuration.port = parsePort(configuration.port)
+    validateWorkers(configuration)
     return configuration
 
 test "configuration reads XML properties"
@@ -305,3 +339,160 @@ test "JWT explicit disable can override lower settings"
         jwtEnabled: "false"
     })
     assert !configuration.jwt.enabled
+
+workerInteger(value, name)
+    try
+        parsed = to_js_number($(value))
+    catch error
+        throw "ApiWorkerInvalidInteger: ${name}"
+    if parsed < 1 or parsed > 9007199254740991 or parsed % 1 != 0
+        throw "ApiWorkerInvalidInteger: ${name}"
+    if name == "threads" and parsed > 128
+        throw "ApiWorkerThreadLimit"
+    return parsed
+
+setWorker(configuration, name, value)
+    if configuration.workers == null
+        configuration.workers = {
+            enabled: true
+        }
+    settings = configuration.workers
+    parsed = value
+    switch name
+      case "enabled"
+          if value != true and value != false and value != "true" and value != "false"
+              throw "ApiWorkerEnabledMustBeBoolean"
+          parsed = value == true or value == "true"
+      case "threads"
+      case "maxQueue"
+      case "bodyLimit"
+          parsed = workerInteger(value, name)
+    settings[name] = parsed
+    return null
+
+applyXmlWorkers(configuration, tag)
+    allowed = ["enabled", "application", "threads", "maxQueue", "bodyLimit", "workerFile", "optionsFile"]
+    if configuration.workers == null
+        setWorker(configuration, "enabled", true)
+    for tag.attributes() as name: value
+        if !allowed.includes(name)
+            throw "ApiWorkerUnknownAttribute: ${name}"
+        setWorker(configuration, name, value)
+    if tag.children().length > 0 or tag.innerText().trim() != ""
+        throw "ApiWorkerConfigurationMustUseAttributes"
+    return null
+
+workersEnabled(configuration)
+    settings = configuration.workers
+    if settings == null
+        return false
+    if !is_object(settings)
+        throw "ApiWorkersMustBeMap"
+    if settings.enabled != null and !is_bool(settings.enabled)
+        throw "ApiWorkerEnabledMustBeBoolean"
+    return settings.enabled != false
+
+validateWorkers(configuration)
+    if !workersEnabled(configuration)
+        return configuration
+    settings = configuration.workers
+    defaults = {
+        application: "dist/worker.mjs"
+        threads: 2
+        maxQueue: 64
+        bodyLimit: 1048576
+    }
+    for defaults as name: value
+        if settings[name] == null
+            settings[name] = value
+    for ["threads", "maxQueue", "bodyLimit"] as name
+        settings[name] = workerInteger(settings[name], name)
+    for ["application", "workerFile", "optionsFile"] as name
+        value = settings[name]
+        if value != null
+            if !is_string(value) or value.trim() == ""
+                throw "ApiWorkerInvalidPath: ${name}"
+    if settings.options != null and !is_object(settings.options)
+        throw "ApiWorkerOptionsMustBeMap"
+    if settings.options != null and settings.optionsFile != null
+        throw "ApiWorkerOptionsConflict"
+    return configuration
+
+test "worker settings follow XML environment and CLI precedence with defaults"
+    configuration = defaultConfiguration("shop")
+    assert !workersEnabled(configuration)
+    xml = <conf>
+        <workers application="dist/xml.mjs" threads="3" maxQueue="9" bodyLimit="2048" optionsFile="worker.json" />
+    </conf>
+    applyXmlConfiguration(configuration, xml)
+    applyEnvironmentConfiguration(configuration, {
+        LANGO_WORKER_APPLICATION: "dist/environment.mjs"
+        LANGO_WORKER_THREADS: "4"
+        LANGO_WORKER_MAX_QUEUE: "12"
+    })
+    applyOptionConfiguration(configuration, {
+        workerApplication: "dist/cli.mjs"
+        workerThreads: "5"
+        workerBodyLimit: "4096"
+    })
+    validateWorkers(configuration)
+    assert workersEnabled(configuration)
+    assert configuration.workers.application == "dist/cli.mjs"
+    assert configuration.workers.threads == 5
+    assert configuration.workers.maxQueue == 12
+    assert configuration.workers.bodyLimit == 4096
+    assert configuration.workers.optionsFile == "worker.json"
+    defaults = defaultConfiguration("shop")
+    applyOptionConfiguration(defaults, {
+        workersEnabled: "true"
+    })
+    validateWorkers(defaults)
+    assert defaults.workers.application == "dist/worker.mjs"
+    assert defaults.workers.threads == 2
+    assert defaults.workers.maxQueue == 64
+    assert defaults.workers.bodyLimit == 1048576
+
+test "workers can be disabled without reading their application and option files"
+    configuration = defaultConfiguration("shop")
+    applyXmlConfiguration(configuration, <conf><workers application="missing.mjs" optionsFile="missing.json" /></conf>)
+    applyOptionConfiguration(configuration, {
+        workersEnabled: "false"
+    })
+    validateWorkers(configuration)
+    assert !workersEnabled(configuration)
+
+test "worker XML rejects unknown attributes duplicate sections and invalid limits"
+    configuration = defaultConfiguration("shop")
+    try
+        applyXmlConfiguration(configuration, <conf><workers thread="4" /></conf>)
+        assert false
+    catch error
+        assert error == "ApiWorkerUnknownAttribute: thread"
+    try
+        applyXmlConfiguration(configuration, <conf><workers /><workers /></conf>)
+        assert false
+    catch error
+        assert error == "ApiDuplicateWorkersConfiguration"
+    for ["0", "1.5", "-1", "invalid"] as value
+        rejected = false
+        try
+            applyOptionConfiguration(configuration, {
+                workerThreads: value
+            })
+        catch error
+            rejected = true
+        assert rejected
+    try
+        applyOptionConfiguration(configuration, {
+            workerThreads: "129"
+        })
+        assert false
+    catch error
+        assert error == "ApiWorkerThreadLimit"
+    try
+        applyOptionConfiguration(configuration, {
+            workersEnabled: "yes"
+        })
+        assert false
+    catch error
+        assert error == "ApiWorkerEnabledMustBeBoolean"

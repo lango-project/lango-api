@@ -245,7 +245,25 @@ Harness:stop()
         cleanup(@directory)
         return Promise/resolve()
     directory = @directory
-    return @host.close().then(()
+    host = @host
+    server = host.server
+    closed = new Promise((resolve, reject)
+        capture server
+        server.once("close", ()
+            capture resolve
+            resolve()
+        )
+        server.close()
+    )
+    return closed.then(()
+        capture host
+        return waitForPool(host.pool, Date/now() + 5000)
+    ).then(()
+        capture host
+        return host.close()
+    ).then(()
+        println("PASS closing the returned HTTP server also closes its worker pool")
+    ).finally(()
         capture directory
         cleanup(directory)
     )
@@ -273,6 +291,17 @@ delay()
         setTimeout(resolve, 10)
     )
     return pending
+
+waitForPool(pool, deadline)
+    if pool.threads.length == 0
+        return Promise/resolve()
+    if Date/now() > deadline
+        throw "WorkerPoolDidNotClose"
+    return delay().then(()
+        capture pool
+        capture deadline
+        return waitForPool(pool, deadline)
+    )
 
 main(args)
     harness = new Harness()

@@ -1,0 +1,276 @@
+import js global Promise
+import js global fetch
+import js global setTimeout
+import js global Date
+import js global process
+import js "node:child_process" as childProcess
+import js "node:fs" as fs
+import js "node:path" as path
+import js "node:os" as os
+import js "node:crypto" as crypto
+import "./library"
+    class Host
+import "./configuration"
+    loadConfiguration(applicationName, configurationFile, paths)
+
+export main(args)
+
+class Harness
+    methods
+        start()
+        libraryRequest()
+        libraryJwt()
+        libraryAnonymous()
+        cliFailure()
+        startCli()
+        waitReady(deadline)
+        checkCli()
+        stopCli()
+        stop()
+
+Harness()
+    @directory = fs.mkdtempSync(path.join(os.tmpdir(), "lango-worker-host-"))
+    @configuration = null
+    @host = null
+    @server = null
+    @port = null
+    @url = null
+    @child = null
+    @didExit = false
+    @stdout = ""
+    @stderr = ""
+    @exited = Promise/withResolvers()
+    @key = crypto/randomBytes(32)
+    @fixture = path.resolve(".test-output/worker_config_fixture.mjs")
+    @entry = path.resolve(".test-output/worker_entry.mjs")
+    @cliState = path.join(@directory, "cli-state")
+    @confFile = path.join(@directory, "conf.xml")
+    fs.writeFileSync(path.join(@directory, "keys.json"), to_json({
+        current: @key.toString("base64")
+    }))
+    fs.writeFileSync(path.join(@directory, "worker-options.json"), to_json({
+        label: "configured"
+    }))
+    xml = <conf>
+        <workers application="missing-xml.mjs" threads="3" optionsFile="worker-options.json" />
+        <jwt issuer="worker-host" audience="browser" activeKeyId="current" keysFile="keys.json" />
+        <state file="shared.sqlite" />
+        <paths appRoot="missing-xml-root" stateDir="missing-xml-state" />
+    </conf>
+    fs.writeFileSync(@confFile, xml)
+
+Harness:start()
+    @configuration = loadConfiguration("worker-host", @confFile, {
+        appRoot: @directory
+        stateDir: path.join(@directory, "library-state")
+        dataDir: path.join(@directory, "data")
+        logDir: path.join(@directory, "logs")
+    })
+    configuration = @configuration
+    configuration.appRoot = @directory
+    configuration.stateDir = path.join(@directory, "library-state")
+    configuration.port = 0
+    configuration.workers.application = @fixture
+    configuration.workers.workerFile = @entry
+    @host = new Host(configuration)
+    return @host.start().then((server)
+        @server = server
+        address = server.address()
+        @port = address.port
+        @url = "http://127.0.0.1:${address.port}"
+    )
+
+Harness:libraryRequest()
+    return fetch("${@url}/info", {
+        method: "POST"
+        body: "{}"
+    }).then((res)
+        return decoded(res)
+    )
+
+decoded(res)
+    return res.json().then((body)
+        capture res
+        return {
+            status: res.status
+            body: body
+            token: res.headers.get("x-lango-token")
+        }
+    )
+
+Harness:libraryJwt()
+    return libraryRequest().then((result)
+        assert result.status == 200
+        assert result.body.threadId > 0
+        assert result.body.label == "configured"
+        assert result.body.appRoot == @directory
+        assert result.body.stateDir == @configuration.stateDir
+        assert result.body.applicationName == "worker-host"
+        assert is_string(result.body.clientId)
+        assert is_string(result.token)
+        return @host.close()
+    ).then(()
+        return @host.close()
+    )
+
+Harness:libraryAnonymous()
+    configuration = @configuration
+    configuration.jwt.enabled = false
+    configuration.jwt.keysFile = "must-not-be-read.json"
+    return @host.start().then((server)
+        @server = server
+        address = server.address()
+        @port = address.port
+        @url = "http://127.0.0.1:${address.port}"
+        return libraryRequest()
+    ).then((result)
+        assert result.status == 200
+        assert result.token == null
+        assert result.body.clientId == null
+        assert result.body.auth == false
+        return @host.close()
+    ).then(()
+        println("PASS Host.start keeps its HTTP server contract, restarts workers and supports configured JWT or anonymous mode")
+    )
+
+Harness:startCli()
+    environment = cleanEnvironment()
+    environment.LANGO_WORKERS = "false"
+    environment.LANGO_WORKER_APPLICATION = "missing-environment.mjs"
+    environment.LANGO_WORKER_THREADS = "2"
+    environment.LANGO_APP_ROOT = "missing-environment-root"
+    environment.LANGO_STATE_DIR = "missing-environment-state"
+    args = [path.resolve(".test-output/worker-cli.mjs"), "worker-cli", "--config", @confFile, "--workers", "true", "--worker-application", @fixture, "--worker-entry", @entry, "--worker-threads", "1", "--app-root", @directory, "--state-dir", path.join(@directory, "cli-state"), "--host", "127.0.0.1", "--port", "${@port}"]
+    child = childProcess/spawn(process.execPath, args, {
+        env: environment
+        stdio: ["ignore", "pipe", "pipe"]
+    })
+    @child = child
+    child.stdout.on("data", (chunk)
+        @stdout = "${@stdout}${chunk}"
+    )
+    child.stderr.on("data", (chunk)
+        @stderr = "${@stderr}${chunk}"
+    )
+    child.once("exit", (code)
+        @didExit = true
+        completed = @exited
+        completed.resolve(code)
+    )
+    child.once("error", (error)
+        @didExit = true
+        @stderr = "${@stderr}${error}"
+        completed = @exited
+        completed.resolve(-1)
+    )
+    return waitReady(Date/now() + 10000)
+
+cleanEnvironment()
+    environment = {
+    }
+    for process.env as name: value
+        if !name.startsWith("LANGO_")
+            environment[name] = value
+    return environment
+
+Harness:cliFailure()
+    result = childProcess/spawnSync(process.execPath, [path.resolve(".test-output/worker-cli.mjs"), "worker-cli", "--config", @confFile, "--workers", "invalid"], {
+        env: cleanEnvironment()
+        encoding: "utf8"
+    })
+    assert result.status == 1
+    assert result.stderr.includes("ApiWorkerEnabledMustBeBoolean")
+    assert !result.stderr.includes("TypeError")
+    println("PASS CLI startup errors exit cleanly with a configuration diagnostic")
+    return null
+
+Harness:waitReady(deadline)
+    if @stdout.includes("lango-api listening on")
+        return Promise/resolve()
+    if @didExit or Date/now() > deadline
+        throw "WorkerCliStartupFailed: ${@stderr}"
+    return delay().then(()
+        capture deadline
+        return waitReady(deadline)
+    )
+
+Harness:checkCli()
+    @url = "http://127.0.0.1:${@port}"
+    return libraryRequest().then((result)
+        assert result.status == 200
+        assert result.body.label == "configured"
+        assert result.body.appRoot == @directory
+        assert result.body.stateDir == @cliState
+        assert result.body.applicationName == "worker-cli"
+        assert is_string(result.body.clientId)
+        assert is_string(result.token)
+        return fetch("${@url}/health")
+    ).then((res)
+        assert res.status == 200
+        return stopCli()
+    ).then(()
+        println("PASS the standard CLI starts workers without api.xml, honors final paths and JWT settings, and drains on SIGTERM")
+    )
+
+Harness:stopCli()
+    if @child == null
+        return Promise/resolve()
+    if !@didExit
+        @child.kill("SIGTERM")
+    completed = @exited
+    return Promise/race([completed.promise, timeout()]).then((code)
+        if code != 0
+            throw "WorkerCliExit ${code}: ${@stderr} ${@stdout}"
+    )
+
+Harness:stop()
+    return stopCli().finally(()
+        if @host != null
+            return @host.close()
+        return null
+    ).finally(()
+        cleanup(@directory)
+    )
+
+cleanup(directory)
+    fs.rmSync(directory, {
+        recursive: true
+        force: true
+    })
+    return null
+
+delay()
+    pending = new Promise((resolve, reject)
+        setTimeout(resolve, 10)
+    )
+    return pending
+
+timeout()
+    pending = new Promise((resolve, reject)
+        expire = ()
+            capture reject
+            reject("WorkerCliShutdownTimeout")
+        timer = setTimeout(expire, 10000)
+        timer.unref()
+    )
+    return pending
+
+main(args)
+    harness = new Harness()
+    return harness.start().then(()
+        capture harness
+        return harness.libraryJwt()
+    ).then(()
+        capture harness
+        return harness.libraryAnonymous()
+    ).then(()
+        capture harness
+        harness.cliFailure()
+        return harness.startCli()
+    ).then(()
+        capture harness
+        return harness.checkCli()
+    ).finally(()
+        capture harness
+        return harness.stop()
+    )

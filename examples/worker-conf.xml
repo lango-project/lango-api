@@ -1,0 +1,6 @@
+<conf>
+    <http host="127.0.0.1" port="8081" />
+    <paths stateDir="data/worker-demo" />
+    <workers application="dist/worker-demo-app.mjs" threads="2" maxQueue="64" />
+    <jwt issuer="worker-demo" audience="worker-demo" activeKeyId="current" keysFile="../data/worker-demo/keys.json" />
+</conf>

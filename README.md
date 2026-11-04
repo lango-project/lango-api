@@ -639,15 +639,15 @@ starts if its `package.json` declares the Lango source and generated entry:
 There is no hot reload. Restart `lango-api` after editing a linked package; the
 restart rebuilds it before the API host begins listening.
 
-## Lisans
+## License
 
 Apache-2.0
 
 ## Synchronous worker prototype
 
-An opt-in Piscina host is available through `@lango-project/lango-api/workers`.
-The existing `Host` and CLI retain their current behavior. This prototype proves
-synchronous request execution; it does not yet replace the default server.
+Worker execution is an opt-in mode of the standard `Host` and CLI. The ordinary
+HTTP path remains the default. A lower-level Piscina host is also available
+through `@lango-project/lango-api/workers`.
 
 The HTTP listener stays on the main thread. A bounded pool runs at most one
 request per worker at a time. Each worker loads the application's compiled
@@ -663,6 +663,86 @@ Returned Promises and thenables are rejected rather than synchronously waited on
 The transport and initial module loading still use Promises at their boundaries.
 Worker logging currently uses the standard default logger.
 
+### Standard Host and CLI configuration
+
+The library enables workers with a `workers` map:
+
+```lango
+host = new api/Host({
+    applicationName: "shop"
+    appRoot: appRoot
+    stateDir: stateDir
+    host: "127.0.0.1"
+    port: 3000
+    workers: {
+        application: "dist/worker.mjs"
+        optionsFile: "worker-options.json"
+        threads: 2
+    }
+    jwt: {
+        issuer: "shop"
+        audience: "browser"
+        activeKeyId: "current"
+        keysFile: keysFile
+    }
+})
+return host.start()
+```
+
+`Host.start()` keeps its Promise-for-HTTP-server contract in both modes.
+`Host.close()` drains requests and closes the worker pool, and is safe to call
+repeatedly. Closing the returned HTTP server directly also closes its pool.
+Configure routes, authorization, and lifecycle callbacks inside `createWorker`;
+parent-side `Host.routes`, `routesFromXml`, and `on` registrations cannot be
+transferred to workers and are rejected at startup.
+
+The standard CLI reads a new configuration section:
+
+```xml
+<conf>
+    <workers application="dist/worker.mjs" threads="2" maxQueue="64"
+             bodyLimit="1048576" optionsFile="worker-options.json" />
+</conf>
+```
+
+A workers section or worker option enables the mode unless explicitly disabled.
+Without worker settings it stays off. Defaults are `dist/worker.mjs`, 2 workers,
+64 waiting tasks, and a 1048576-byte body limit. Missing standard directories use
+the existing development/server directory selection in the CLI. Application,
+worker-entry override, and options-file paths resolve against the final
+`appRoot`, after all overrides. An options file must contain a JSON map. The
+library may instead pass `workers.options` directly; combining both is rejected.
+The factory receives `applicationName`, `appRoot`, `dataDir`, `stateDir`, and
+`logDir` as defaults, with explicit application options overriding those values.
+
+Configuration precedence remains XML, then environment, then command line:
+
+| CLI | Environment | `workers` attribute |
+| --- | --- | --- |
+| `--workers true\|false` | `LANGO_WORKERS` | `enabled` |
+| `--worker-application` | `LANGO_WORKER_APPLICATION` | `application` |
+| `--worker-threads` | `LANGO_WORKER_THREADS` | `threads` |
+| `--worker-max-queue` | `LANGO_WORKER_MAX_QUEUE` | `maxQueue` |
+| `--worker-body-limit` | `LANGO_WORKER_BODY_LIMIT` | `bodyLimit` |
+| `--worker-entry` | `LANGO_WORKER_ENTRY` | `workerFile` |
+| `--worker-options` | `LANGO_WORKER_OPTIONS` | `optionsFile` |
+
+Existing JWT settings load the shared key material once in the parent. XML key
+filenames remain relative to `conf.xml`; environment/CLI key filenames follow
+the existing working-directory rule. Missing or disabled JWT configuration
+runs requests with an anonymous token context and does not read a key file.
+Bootstrap/logout endpoints and authenticated UI replay require JWT to be enabled.
+The SQLite file defaults to `stateDir/runtime.sqlite` with the application name
+as namespace. Existing `<state>`/environment/CLI overrides still apply; an
+explicit memory backend or a live parent-side state/token instance is rejected.
+
+Worker mode starts from the factory without loading `api.xml`. Supplying
+`--api`, `LANGO_API`, or an explicit API file in worker mode is rejected until
+worker-side XML route loading is implemented. The CLI closes the host on SIGINT
+and SIGTERM.
+
+### Lower-level worker host
+
 `startWorkers(configuration)` returns a Promise for a `WorkerHost`. Alternatively,
 construct `WorkerHost` and call `start()`. Its `server` and `pool` properties expose
 the underlying HTTP server and Piscina instance. `close()` stops new requests,
@@ -670,7 +750,8 @@ waits for accepted HTTP requests, and closes the pool. Application `close` hooks
 are worker-exit cleanup; forced termination must not be relied on to complete
 application cleanup or transactions.
 
-Configuration:
+Direct `WorkerHost` configuration (these are transport settings rather than the
+standard `Host` configuration shown above):
 
 - `application`: absolute path to the compiled application module exporting
   `createWorker(options)`.
@@ -682,7 +763,7 @@ Configuration:
 - `tokens`: `issuer`, `audience`, `activeKeyId`, `keys` containing byte arrays,
   and optional `ttlSeconds`/`sessionTtlSeconds`. Keys are supplied once by the
   parent; keep them stable across restarts. Revocation uses the shared SQLite
-  store automatically.
+  store automatically. Omit `tokens` or pass null for anonymous operation.
 - `options`: structured-cloneable application factory settings.
 - `host`, `port`: HTTP bind address and port.
 - `threads`: fixed pool size, default 2, maximum 128.
@@ -733,19 +814,30 @@ curl -X POST http://127.0.0.1:8081/hello \
   -H 'Content-Type: application/json' -d '{"name":"Lango"}'
 ```
 
-The demo keeps its reusable JWT key and SQLite state in `data/worker-demo`.
-The application handler is in `examples/worker-app.lango`; the transport launcher
-is in `examples/worker-server.lango`. Both are Lango source.
+The demo uses standard `Host` configuration and keeps its reusable JSON key file
+and SQLite state in `data/worker-demo`. It preserves a key from an earlier binary
+`jwt.key` demo file when creating `keys.json`. The application handler is in
+`examples/worker-app.lango`; the launcher is in `examples/worker-server.lango`.
+Both are Lango source.
 
-`npm test` includes synchronous JWT compatibility and validation tests.
+After starting the demo once to create its key file, stop it and launch the same
+application through the normal CLI from this repository:
+
+```sh
+node dist/cli.mjs worker-demo --app-root . --config examples/worker-conf.xml
+```
+
+`npm test` includes synchronous JWT compatibility, settings precedence, Host
+restart/close, anonymous mode, and real CLI startup/SIGTERM tests. The worker
+Host/CLI tests do not require the UI repository.
 `npm run test:workers` additionally builds the sibling `../lango-ui` project and
 runs a real two-worker HTTP/UI/SQLite integration test. It checks replay,
 Promise rejection, request limits, simultaneous workers, queue overload,
 main-thread health responsiveness, and cross-worker logout during a running
 request. This integration test requires the local multi-repository workspace.
 
-Remaining integration includes the standard CLI/XML/environment configuration,
-linked-package preparation, string-module preloading, batch ping, request audit,
+Remaining integration includes linked-package preparation, string-module
+preloading, worker-side XML route/lifecycle loading, batch ping, request audit,
 and other asynchronous adapters. Streaming, sockets, arbitrary parent-process
 instances, background asynchronous jobs, and automatic retry after a worker
 crash are outside this prototype. A failed request can already have committed

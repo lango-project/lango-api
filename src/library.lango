@@ -1,3 +1,4 @@
+import js global Promise
 import "./api_registry"
     addRoute(routes, endpoint)
     createEndpoint(options)
@@ -20,6 +21,12 @@ import "./lifecycle"
     createLifecycle(spec)
     addLifecycle(handlers, options)
     lifecycleTargets(handlers)
+import "./configuration"
+    workersEnabled(configuration)
+import "./worker_configuration"
+    workerConfiguration(configuration)
+import "./worker_host"
+    class WorkerHost
 
 export class Host
     methods
@@ -27,6 +34,7 @@ export class Host
         routesFromXml(apiFile)
         on(options)
         start()
+        close()
 
 export class Routes
     methods
@@ -40,6 +48,8 @@ Host(configuration)
     configuration.lifecycle = createLifecycle(configuration.lifecycle)
     @routes = null
     @xmlLifecycle = createLifecycle(null)
+    @server = null
+    @workers = null
 
 Host:routes(routes)
     @routes = routes.values()
@@ -63,6 +73,10 @@ Host:on(options)
     return @this
 
 Host:start()
+    if workersEnabled(@configuration)
+        if @routes != null
+            throw "ApiWorkerRoutesMustBeCreatedInFactory"
+        return startWorkers()
     if @routes == null
         throw "ApiRoutesNotConfigured"
     configuration = @configuration
@@ -83,12 +97,41 @@ Host:start()
     return pending.then(()
         capture configuration
         capture routes
-        return startServer(configuration, routes)
+        server = startServer(configuration, routes)
+        @server = server
+        return server
     ).catch((failure)
         capture configuration
         closeOwnedState(configuration)
         throw failure
     )
+
+Host:startWorkers()
+    settings = workerConfiguration(@configuration)
+    @workers = new WorkerHost(settings)
+    return @workers.start().then((host)
+        @server = host.server
+        return @server
+    ).catch((error)
+        @workers = null
+        throw error
+    )
+
+Host:close()
+    if @workers != null
+        return @workers.close()
+    server = @server
+    if server == null or !server.listening
+        return Promise/resolve()
+    closed = new Promise((resolve, reject)
+        capture server
+        server.once("close", ()
+            capture resolve
+            resolve()
+        )
+        server.close()
+    )
+    return closed
 
 mergeLifecycle(base, extra)
     handlers = createLifecycle(base)
