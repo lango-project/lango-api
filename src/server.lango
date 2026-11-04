@@ -101,7 +101,7 @@ ApiResponse:status(code)
     if @completed
         throw "ApiResponseAlreadySent"
     @statusCode = code
-    return this
+    return @this
 
 ApiResponse:header(name, value)
     if !is_string(name) or name == ""
@@ -110,38 +110,33 @@ ApiResponse:header(name, value)
         throw "ApiResponseAlreadySent"
     res = @httpResponse
     res.setHeader(name, value)
-    return this
+    return @this
 
 ApiResponse:send(value)
     if @completed
         throw "ApiResponseAlreadySent"
     body = to_json(value)
     @completed = true
-    reply = this
-    this.restoreTokenIdentity()
+    restoreTokenIdentity()
     if @logout != null
         @claims.auth = false
         return @logout.then(()
-            capture reply
             capture body
-            reply.write(body, null)
+            write(body, null)
         ).catch((error)
-            capture reply
-            reply.signingFailed()
+            signingFailed()
         )
     if @tokenService != null and @claims != null
         try
             return @tokenService.sign(@claims).then((token)
-                capture reply
                 capture body
-                reply.write(body, token)
+                write(body, token)
             ).catch((error)
-                capture reply
-                reply.signingFailed(error)
+                signingFailed(error)
             )
         catch error
-            return this.signingFailed(error)
-    return this.write(body, null)
+            return signingFailed(error)
+    return write(body, null)
 
 ApiResponse:logout()
     if @completed
@@ -151,7 +146,7 @@ ApiResponse:logout()
     if @logout == null
         @claims.auth = false
         @originalClaims.auth = false
-        this.header("Cache-Control", "no-store")
+        header("Cache-Control", "no-store")
         pending = @tokenService.revoke({
             sessionId: @sessionId
         })
@@ -180,7 +175,7 @@ ApiResponse:signingFailed(error = null)
         @statusCode = 401
         @httpResponse.setHeader("WWW-Authenticate", "Bearer")
         @httpResponse.setHeader("Cache-Control", "no-store")
-        return this.write(to_json({
+        return write(to_json({
             error: "Unauthorized"
             requestId: @requestId
         }), null)
@@ -191,7 +186,7 @@ ApiResponse:signingFailed(error = null)
         error: "InternalServerError"
         requestId: @requestId
     })
-    return this.write(body, null)
+    return write(body, null)
 
 ApiResponse:completed()
     return @completed

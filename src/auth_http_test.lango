@@ -119,11 +119,9 @@ Harness:begin()
         tokenService: service
     }, routes)
     @server = server
-    harness = this
     ready = new Promise((resolve, reject)
         capture server
-        capture harness
-        register(server, harness, resolve, reject)
+        register(server, @this, resolve, reject)
     )
     return ready
 
@@ -145,7 +143,7 @@ register(server, harness, resolve, reject)
 Harness:listening(completion)
     address = @server.address()
     @url = "http://127.0.0.1:${address.port}"
-    completion.resolve(this)
+    completion.resolve(@this)
 
 Harness:request(path, token, input = null)
     if input == null

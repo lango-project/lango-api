@@ -57,17 +57,15 @@ Collector:observe(input)
       case "send"
           return response.send("must-not-replace-response")
       case "hold"
-          return this.hold()
+          return hold()
     return null
 
 Collector:wait(count)
     if @records.length >= count
         return Promise/resolve()
-    collector = this
     ready = new Promise((resolve, reject)
-        capture collector
         capture count
-        collector.waiting(count, resolve)
+        waiting(count, resolve)
     )
     return ready
 
@@ -79,10 +77,8 @@ Collector:waiting(count, resolve)
     return null
 
 Collector:hold()
-    collector = this
     pending = new Promise((resolve, reject)
-        capture collector
-        collector.suspend(resolve)
+        suspend(resolve)
     )
     return pending
 
@@ -97,6 +93,7 @@ Collector:release()
 
 class Harness
     properties
+        server
         collector
         service
         url
@@ -151,10 +148,8 @@ Harness:begin()
         auth: deny
     })
     host.routes(routes)
-    harness = this
     return host.start().then((server)
-        capture harness
-        return awaitListening(harness, server)
+        return awaitListening(@this, server)
     )
 
 awaitListening(harness, server)
@@ -182,9 +177,9 @@ listen(server, harness, resolve, reject)
     )
 
 Harness:listening(completion)
-    address = this.server.address()
+    address = @server.address()
     @url = "http://127.0.0.1:${address.port}"
-    completion.resolve(this)
+    completion.resolve(@this)
 
 Harness:request(path, raw, token = null)
     headers = {
@@ -201,9 +196,9 @@ Harness:request(path, raw, token = null)
     })
 
 Harness:stop()
-    if this.server != null
-        this.server.close()
-        this.server.closeAllConnections()
+    if @server != null
+        @server.close()
+        @server.closeAllConnections()
 
 edit(input)
     context request

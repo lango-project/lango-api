@@ -58,19 +58,15 @@ Harness:start()
     })
     host = new Host(@configuration)
     host.routes(routes)
-    harness = this
     return host.start().then((server)
-        capture harness
-        return harness.opened(server)
+        return opened(server)
     )
 
 Harness:opened(server)
     @server = server
-    harness = this
     pending = new Promise((resolve, reject)
         capture server
-        capture harness
-        listen(server, harness, resolve, reject)
+        listen(server, @this, resolve, reject)
     )
     return pending
 
@@ -95,7 +91,7 @@ listen(server, harness, resolve, reject)
 Harness:listening(completion)
     address = @server.address()
     @url = "http://127.0.0.1:${address.port}"
-    completion.resolve(this)
+    completion.resolve(@this)
 
 Harness:request(endpoint, input = null)
     url = @url

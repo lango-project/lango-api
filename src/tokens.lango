@@ -124,16 +124,14 @@ TokenService:sign(claims)
     signer.setIssuedAt(now)
     signer.setExpirationTime(expiresAt)
     signer.setJti(crypto/randomUUID())
-    service = this
     key = @keys[@activeKeyId]
-    return this.checkSession(payload).then(()
+    return checkSession(payload).then(()
         capture signer
         capture key
         return signer.sign(key)
     ).then((token)
-        capture service
         capture payload
-        return checkedToken(service, payload, token)
+        return checkedToken(@this, payload, token)
     )
 
 checkedToken(service, claims, token)
@@ -174,15 +172,12 @@ TokenService:revoke(claims)
     )
 
 TokenService:verify(token)
-    service = this
     return Promise/resolve().then(()
-        capture service
         capture token
-        return service.verifySigned(token)
+        return verifySigned(token)
     ).then((verified)
-        capture service
         claims = verifiedPayload(verified)
-        return verifiedSession(service, claims)
+        return verifiedSession(@this, claims)
     ).catch((error)
         throw "ApiInvalidToken"
     )
@@ -223,17 +218,15 @@ requireTokenIdentity(claims)
     return null
 
 TokenService:restart(token)
-    return this.startSession(token).then((session)
+    return startSession(token).then((session)
         return session.claims
     )
 
 TokenService:startSession(token)
-    service = this
     sessionTtl = @sessionTtl
     return Promise/resolve().then(()
-        capture service
         capture token
-        return recoverIdentity(service, token)
+        return recoverIdentity(@this, token)
     ).catch((error)
         return newIdentity()
     ).then((identity)

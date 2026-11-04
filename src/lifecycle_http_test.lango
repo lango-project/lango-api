@@ -19,6 +19,7 @@ class Harness
     properties
         service
         hooks
+        server
     methods
         begin()
         listening(completion)
@@ -68,10 +69,8 @@ Harness:begin()
               function: "started"
           })
           host.routes(routes)
-    harness = this
     return host.start().then((server)
-        capture harness
-        return harnessReady(harness, server)
+        return harnessReady(@this, server)
     )
 
 harnessReady(harness, server)
@@ -99,9 +98,9 @@ registerListening(harness, server, resolve, reject)
     )
 
 Harness:listening(completion)
-    address = this.server.address()
+    address = @server.address()
     @url = "http://127.0.0.1:${address.port}"
-    completion.resolve(this)
+    completion.resolve(@this)
 
 Harness:request(path, token, mode = "normal")
     headers = {
@@ -119,9 +118,9 @@ Harness:request(path, token, mode = "normal")
     })
 
 Harness:stop()
-    if this.server != null
-        this.server.close()
-        this.server.closeAllConnections()
+    if @server != null
+        @server.close()
+        @server.closeAllConnections()
     if @directory != null
         fs.unlinkSync(path.join(@directory, "api.xml"))
         fs.rmdirSync(@directory)

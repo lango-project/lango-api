@@ -55,6 +55,7 @@ Hooks:audit(input)
 
 class Harness
     properties
+        server
         service
         key
         hooks
@@ -93,10 +94,8 @@ Harness:begin()
         module: @hooks
         function: "audit"
     })
-    harness = this
     return host.start().then((server)
-        capture harness
-        return waiting(harness, server)
+        return waiting(@this, server)
     )
 
 waiting(harness, server)
@@ -124,12 +123,12 @@ listen(harness, server, resolve, reject)
     )
 
 Harness:listening(completion)
-    address = this.server.address()
+    address = @server.address()
     @url = "http://127.0.0.1:${address.port}/_lango/ping"
-    completion.resolve(this)
+    completion.resolve(@this)
 
 Harness:request(input)
-    return this.raw(to_json(input))
+    return raw(to_json(input))
 
 Harness:raw(body)
     return fetch(@url, {
@@ -142,9 +141,9 @@ Harness:raw(body)
     })
 
 Harness:stop()
-    if this.server != null
-        this.server.close()
-        this.server.closeAllConnections()
+    if @server != null
+        @server.close()
+        @server.closeAllConnections()
 
 main(args)
     harness = new Harness()

@@ -84,11 +84,9 @@ Harness:begin()
         handler: delayedLogoutHandler
     }])
     @server = server
-    harness = this
     pending = new Promise((resolve, reject)
-        capture harness
         capture server
-        listen(harness, server, resolve, reject)
+        listen(@this, server, resolve, reject)
     )
     return pending
 
@@ -110,7 +108,7 @@ listen(harness, server, resolve, reject)
 Harness:listening(completion)
     address = @server.address()
     @url = "http://127.0.0.1:${address.port}"
-    completion.resolve(this)
+    completion.resolve(@this)
 
 Harness:request(path, token, input = null)
     headers = {

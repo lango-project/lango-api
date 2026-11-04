@@ -44,7 +44,7 @@ Host(configuration)
 Host:routes(routes)
     @routes = routes.values()
     @xmlLifecycle = createLifecycle(null)
-    return this
+    return @this
 
 Host:routesFromXml(apiFile)
     api = loadApi(apiFile)
@@ -52,7 +52,7 @@ Host:routesFromXml(apiFile)
     mergeLifecycle(configuration.lifecycle, api.lifecycle)
     @routes = api.routes
     @xmlLifecycle = api.lifecycle
-    return this
+    return @this
 
 Host:on(options)
     configuration = @configuration
@@ -60,7 +60,7 @@ Host:on(options)
     addLifecycle(handlers, options)
     mergeLifecycle(handlers, @xmlLifecycle)
     configuration.lifecycle = handlers
-    return this
+    return @this
 
 Host:start()
     if @routes == null
@@ -123,11 +123,11 @@ Routes:auth(options)
     if name in @auths
         throw "ApiDuplicateAuthName: ${name}"
     @auths[name] = createAuth(options)
-    return this
+    return @this
 
 Routes:endpoint(options)
     addRoute(@items, createEndpoint(options))
-    return this
+    return @this
 
 Routes:group(options)
     if not is_object(options)
@@ -170,7 +170,7 @@ RouteGroup:endpoint(options)
           else
               endpoint.module = @mod
     addRoute(@items, endpoint)
-    return this
+    return @this
 
 RouteGroup:group(options)
     if not is_object(options)

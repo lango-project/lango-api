@@ -51,7 +51,7 @@ SqliteStateStore(file, options = null)
         db.exec("CREATE INDEX IF NOT EXISTS lango_revocations_expiry ON lango_revocations(namespace, expires_at)")
         db.exec("CREATE INDEX IF NOT EXISTS lango_replay_expiry ON lango_replay(namespace, expires_at)")
     catch error
-        this.close()
+        close()
         throw error
 
 SqliteStateStore:isRevoked(sessionId)
@@ -76,7 +76,7 @@ SqliteStateStore:claim(key, seqno, expiresAt)
     db = @db
     db.exec("BEGIN IMMEDIATE")
     try
-        result = this.claimLocked(key, seqno, expiresAt)
+        result = claimLocked(key, seqno, expiresAt)
         db.exec("COMMIT")
         return result
     catch error
