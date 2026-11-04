@@ -1,0 +1,339 @@
+import js "node:http" as http
+import js "node:worker_threads" as threads
+import "./tokens"
+    class SyncTokenService
+import "./state"
+    class SqliteStateStore
+import "./api_registry"
+    findRoute(routes, requestPath)
+import "./synchronous"
+    requireSync(value)
+
+export class WorkerRuntime
+    methods
+        handle(task)
+        dispatch(task, reply)
+        begin(raw, reply)
+        close()
+
+class WorkerResponse
+    properties
+        statusCode
+    methods
+        status(code)
+        header(name, value)
+        send(value)
+        completed()
+        bindToken(claims)
+        restoreIdentity()
+        discardTokenChanges()
+        logout()
+        result()
+        failure(code, error)
+
+WorkerRuntime(configuration, factory)
+    @store = new SqliteStateStore(configuration.stateFile, {
+        namespace: configuration.namespace
+        maxForms: configuration.maxForms
+    })
+    @closed = false
+    try
+        settings = configuration.tokens
+        settings.revocations = @store
+        @tokens = new SyncTokenService(settings)
+        context state = @store
+        definition = requireSync(factory(configuration.options))
+        if !is_object(definition) or !is_array(definition.routes)
+            throw "ApiWorkerRequiresRoutes"
+        @routes = definition.routes
+        @register = definition.register
+        @start = definition.start
+        @cleanup = definition.close
+        for [@register, @start, @cleanup] as hook
+            if hook != null
+                requireHook(hook)
+        for @routes as route
+            if route.path == "/_lango/start" or route.path == "/_lango/logout" or route.path == "/_lango/ping"
+                throw "ApiWorkerReservedPath"
+            requireTarget(route)
+            if route.auth != null
+                requireHook(route.auth)
+    catch error
+        close()
+        throw error
+
+WorkerRuntime:close()
+    if !@closed
+        @closed = true
+        try
+            if @cleanup != null
+                invokeHook(@cleanup, null)
+        finally
+            @store.close()
+    return null
+
+WorkerRuntime:handle(task)
+    if task.ready == true
+        return {
+            threadId: threads.threadId
+        }
+    context log
+    context request = task.request
+    reply = new WorkerResponse(@tokens, request.id)
+    context response = reply
+    context token = {
+        auth: false
+    }
+    context state = @store
+    try
+        dispatch(task, reply)
+    catch error
+        log.err("[${request.id}] ${request.method} ${request.path}: worker handler failed")
+        if !reply.completed()
+            reply.discardTokenChanges()
+            reply.failure(500, "InternalServerError")
+    return reply.result()
+
+WorkerRuntime:begin(raw, reply)
+    context request
+    session = @tokens.startSession(raw)
+    claims = session.claims
+    context token = claims
+    reply.bindToken(claims)
+    metadata = {
+        clientId: claims.clientId
+        sessionId: claims.sessionId
+        sessionStartedAt: claims.sessionStartedAt
+        sessionExpiresAt: claims.sessionExpiresAt
+        ip: request.remoteAddress
+        userAgent: request.headers["user-agent"]
+        url: request.path
+    }
+    if session.registered and @register != null
+        invokeHook(@register, metadata)
+        reply.restoreIdentity()
+    if @start != null
+        invokeHook(@start, metadata)
+        reply.restoreIdentity()
+    return claims
+
+WorkerRuntime:dispatch(task, reply)
+    context request
+    route = findRoute(@routes, request.path)
+    bootstrap = request.path == "/_lango/start"
+    logout = request.path == "/_lango/logout"
+    if route == null and !bootstrap and !logout
+        return reply.failure(404, "RouteNotFound")
+    input = null
+    try
+        input = from_json(task.body)
+    catch error
+        return reply.failure(400, "BadRequest")
+    raw = null
+    try
+        raw = bearer(task.request.headers.authorization)
+    catch error
+        return reply.failure(401, "Unauthorized")
+    claims = null
+    if bootstrap
+        claims = begin(raw, reply)
+      else
+          if raw == null
+              if logout or route.anonymous != true
+                  return reply.failure(401, "Unauthorized")
+              claims = begin(null, reply)
+            else
+                try
+                    claims = @tokens.verify(raw)
+                catch error
+                    return reply.failure(401, "Unauthorized")
+    if reply.completed()
+        return null
+    context token = claims
+    reply.bindToken(claims)
+    if bootstrap
+        return reply.send({
+            clientId: claims.clientId
+            sessionId: claims.sessionId
+        })
+    if logout
+        reply.logout()
+        return reply.send({
+            loggedOut: true
+        })
+    if route.anonymous != true and claims.auth != true
+        return reply.failure(401, "Unauthorized")
+    if route.auth != null
+        allowed = invokeHook(route.auth, input)
+        if !is_bool(allowed)
+            throw "ApiAuthMustReturnBoolean"
+        if !allowed
+            reply.discardTokenChanges()
+            return reply.failure(403, "Forbidden")
+        reply.restoreIdentity()
+    result = invokeTarget(route, input)
+    if !reply.completed()
+        reply.send(result)
+    return null
+
+requireTarget(route)
+    if is_kindof(route.handler, Function)
+        return null
+    if route.mod != null or !is_object(route.module) or !is_string(route.func)
+        throw "ApiWorkerModuleMustBePreloaded"
+    mod = route.module
+    name = route.func
+    if !is_kindof(mod[name], Function)
+        throw "ApiWorkerRequiresHandler"
+    return null
+
+invokeTarget(route, input)
+    if is_kindof(route.handler, Function)
+        return requireSync(route.handler(input))
+    mod = route.module
+    name = route.func
+    result = mod[name](input)
+    return requireSync(result)
+
+requireHook(target)
+    if is_kindof(target, Function)
+        return null
+    if !is_object(target) or is_string(target.module)
+        throw "ApiWorkerModuleMustBePreloaded"
+    if is_kindof(target.function, Function)
+        return null
+    mod = target.module
+    name = target.function
+    if !is_object(mod) or !is_string(name) or !is_kindof(mod[name], Function)
+        throw "ApiWorkerRequiresHandler"
+    return null
+
+invokeHook(target, input)
+    requireHook(target)
+    if is_kindof(target, Function)
+        return requireSync(target(input))
+    if is_kindof(target.function, Function)
+        return requireSync(target.function(input))
+    mod = target.module
+    name = target.function
+    result = mod[name](input)
+    return requireSync(result)
+
+bearer(authorization)
+    if authorization == null
+        return null
+    if !is_string(authorization) or authorization.slice(0, 7).toLowerCase() != "bearer " or authorization.length == 7
+        throw "ApiInvalidToken"
+    return authorization.slice(7)
+
+WorkerResponse(service, requestId)
+    @service = service
+    @requestId = requestId
+    @statusCode = 200
+    @headers = {
+        "Content-Type": "application/json; charset=utf-8"
+    }
+    @completed = false
+    @claims = null
+    @original = null
+    @loggedOut = false
+    @sentClaims = null
+
+WorkerResponse:status(code)
+    if @completed
+        throw "ApiResponseAlreadySent"
+    if !is_number(code) or code < 100 or code > 599 or code % 1 != 0
+        throw "ApiResponseInvalidStatus"
+    @statusCode = code
+    return @this
+
+WorkerResponse:header(name, value)
+    if @completed
+        throw "ApiResponseAlreadySent"
+    http/validateHeaderName(name)
+    http/validateHeaderValue(name, value)
+    if name.toLowerCase() == "x-lango-token"
+        throw "ApiTokenHeaderIsReserved"
+    @headers[name] = value
+    return @this
+
+WorkerResponse:bindToken(claims)
+    @claims = claims
+    @original = from_json(to_json(claims))
+    return null
+
+WorkerResponse:restoreIdentity()
+    if @claims != null
+        @claims.clientId = @original.clientId
+        @claims.sessionId = @original.sessionId
+        @claims.sessionStartedAt = @original.sessionStartedAt
+        @claims.sessionExpiresAt = @original.sessionExpiresAt
+    return null
+
+WorkerResponse:discardTokenChanges()
+    if @claims != null
+        @claims = from_json(to_json(@original))
+    return null
+
+WorkerResponse:send(value)
+    if @completed
+        throw "ApiResponseAlreadySent"
+    restoreIdentity()
+    if @claims != null
+        @sentClaims = from_json(to_json(@claims))
+    @body = to_json(value)
+    @completed = true
+    return null
+
+WorkerResponse:completed()
+    return @completed
+
+WorkerResponse:logout()
+    if @completed
+        throw "ApiResponseAlreadySent"
+    if @claims == null
+        throw "ApiTokenSessionRequired"
+    if !@loggedOut
+        @service.revoke(@original)
+        @loggedOut = true
+        @claims.auth = false
+        @original.auth = false
+        header("Cache-Control", "no-store")
+    return null
+
+WorkerResponse:failure(code, error)
+    status(code)
+    if code == 401
+        header("WWW-Authenticate", "Bearer")
+    header("Cache-Control", "no-store")
+    return send({
+        error: error
+        requestId: @requestId
+    })
+
+WorkerResponse:result()
+    if !@completed
+        send(null)
+    restoreIdentity()
+    if @sentClaims != null and !@loggedOut
+        try
+            renewed = @service.sign(@sentClaims)
+            @headers["X-Lango-Token"] = renewed
+            @headers["Cache-Control"] = "no-store"
+        catch error
+            @statusCode = 500
+            message = "InternalServerError"
+            if error == "ApiInvalidToken"
+                @statusCode = 401
+                message = "Unauthorized"
+                @headers["WWW-Authenticate"] = "Bearer"
+            @body = to_json({
+                error: message
+                requestId: @requestId
+            })
+            @headers["Cache-Control"] = "no-store"
+    return {
+        status: @statusCode
+        headers: @headers
+        body: @body
+    }

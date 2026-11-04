@@ -1,0 +1,132 @@
+import js global Promise
+import js global Date
+import js "node:fs" as fs
+import js "node:sqlite" as sqlite
+import js "node:worker_threads" as threads
+import js "../../lango-ui/dist/library.mjs" as ui
+import "./library"
+    class Routes
+
+export createWorker(options)
+
+global database = null
+global dispatcher = null
+global settings = null
+
+createWorker(options)
+    global database
+    global dispatcher
+    global settings
+    settings = options
+    database = new sqlite/DatabaseSync(options.database)
+    database.exec("PRAGMA busy_timeout = 5000")
+    database.exec("CREATE TABLE IF NOT EXISTS visits (request_id TEXT PRIMARY KEY, worker INTEGER NOT NULL)")
+    dispatcher = new ui/Dispatcher(".", {
+        synchronous: true
+    })
+    dispatcher.event({
+        path: "/app/save"
+        function: save
+    })
+    routes = new Routes()
+    routes.endpoint({
+        path: "/app/*"
+        function: uiEvent
+        anonymous: true
+    })
+    routes.endpoint({
+        path: "/info"
+        function: info
+        anonymous: true
+    })
+    routes.endpoint({
+        path: "/slow"
+        function: slow
+        anonymous: true
+    })
+    routes.endpoint({
+        path: "/bad"
+        function: asynchronous
+        anonymous: true
+    })
+    routes.endpoint({
+        path: "/throw"
+        function: failure
+        anonymous: true
+    })
+    routes.endpoint({
+        path: "/private"
+        function: info
+    })
+    return {
+        routes: routes.values()
+        close: closeDatabase
+    }
+
+uiEvent(input)
+    global dispatcher
+    return dispatcher.handle(input)
+
+save(input)
+    global database
+    context request
+    context response
+    context token
+    context form
+    context state
+    context log
+    assert state.isClosed() == false
+    assert request.path == "/app/save"
+    assert is_string(token.clientId)
+    query = database.prepare("INSERT INTO visits(request_id, worker) VALUES (?, ?)")
+    query.run(request.id, threads.threadId)
+    response.header("X-Worker-Thread", "${threads.threadId}")
+    form.saveButton.enabled = false
+    form.email.value = "Saved: ${form.email.value}"
+    log.debug("UI handler executed synchronously")
+    return null
+
+info(input)
+    context token
+    context request
+    return {
+        threadId: threads.threadId
+        clientId: token.clientId
+        sessionId: token.sessionId
+        auth: token.auth
+        path: request.path
+    }
+
+slow(input)
+    global settings
+    if !is_number(input.milliseconds) or input.milliseconds < 1 or input.milliseconds > 2000
+        throw "InvalidDelay"
+    marker = settings.marker
+    if input.second == true
+        marker = "${marker}.second"
+    fs.writeFileSync(marker, "${threads.threadId}")
+    end = Date/now() + input.milliseconds
+    try
+        loop while Date/now() < end
+            spin()
+    finally
+        fs.unlinkSync(marker)
+    return {
+        threadId: threads.threadId
+    }
+
+spin()
+    return null
+
+asynchronous(input)
+    return Promise/resolve(input)
+
+failure(input)
+    throw "SensitiveWorkerDetail"
+
+closeDatabase(input)
+    global database
+    if database != null
+        database.close()
+        database = null
+    return null

@@ -1,0 +1,27 @@
+import js "@lango-project/lango-api" as api
+
+export createWorker(options)
+
+createWorker(options)
+    routes = new api/Routes()
+    routes.endpoint({
+        path: "/hello"
+        function: hello
+        anonymous: true
+    })
+    return {
+        routes: routes.values()
+    }
+
+hello(input)
+    context request
+    context token
+    context state
+    context log
+    log.info("[${request.id}] Handling /hello")
+    return {
+        message: "Hello, ${input.name}"
+        clientId: token.clientId
+        sessionId: token.sessionId
+        stateAvailable: !state.isClosed()
+    }

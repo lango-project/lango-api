@@ -1,0 +1,297 @@
+import js global Promise
+import js global fetch
+import js global setTimeout
+import js global Date
+import js "node:fs" as fs
+import js "node:path" as path
+import js "node:os" as os
+import js "node:crypto" as crypto
+import js "node:sqlite" as sqlite
+import "./worker_host"
+    startWorkers(configuration)
+
+export main(args)
+
+class Harness
+    methods
+        start()
+        post(endpoint, input = null, bearer = null)
+        bootstrap()
+        ui()
+        errors()
+        parallel()
+        queue()
+        health()
+        otherWorker()
+        logout()
+        stop()
+
+Harness()
+    @directory = fs.mkdtempSync(path.join(os.tmpdir(), "lango-workers-"))
+    @host = null
+    @token = null
+    @url = null
+    @busyThread = null
+    @slow = null
+    @slowOne = null
+    @slowTwo = null
+    @marker = path.join(@directory, "running")
+    @database = path.join(@directory, "application.sqlite")
+
+Harness:start()
+    return startWorkers({
+        appRoot: path.resolve(".")
+        application: path.resolve(".test-output/worker_fixture.mjs")
+        stateFile: path.join(@directory, "runtime.sqlite")
+        namespace: "worker-test"
+        host: "127.0.0.1"
+        port: 0
+        threads: 2
+        maxQueue: 1
+        bodyLimit: 4096
+        tokens: {
+            issuer: "worker-test"
+            audience: "worker-test"
+            activeKeyId: "current"
+            keys: {
+                current: crypto/randomBytes(32)
+            }
+        }
+        options: {
+            database: @database
+            marker: @marker
+        }
+    }).then((host)
+        @host = host
+        address = host.server.address()
+        @url = "http://127.0.0.1:${address.port}"
+        return null
+    )
+
+Harness:post(endpoint, input = null, bearer = null)
+    if bearer == null
+        bearer = @token
+    headers = {
+        "Content-Type": "application/json"
+    }
+    if bearer != null
+        headers.Authorization = "Bearer ${bearer}"
+    return fetch("${@url}${endpoint}", {
+        method: "POST"
+        headers: headers
+        body: to_json(input)
+    }).then((res)
+        return readResponse(res)
+    )
+
+readResponse(res)
+    return res.json().then((body)
+        capture res
+        return {
+            status: res.status
+            body: body
+            token: res.headers.get("x-lango-token")
+            thread: res.headers.get("x-worker-thread")
+        }
+    )
+
+Harness:bootstrap()
+    return post("/_lango/start").then((result)
+        assert result.status == 200
+        assert is_string(result.token)
+        @token = result.token
+    )
+
+uiInput()
+    return {
+        formId: "profile"
+        formInstanceId: "instance"
+        seqno: 1
+        values: {
+            email: "hello@example.com"
+            saveButton: null
+        }
+    }
+
+Harness:ui()
+    return post("/app/save", uiInput()).then((result)
+        assert result.status == 200
+        assert result.body.vals.email == "Saved: hello@example.com"
+        assert result.body.cmds[0].type == "setProperty"
+        assert result.body.cmds[0].name == "enabled"
+        assert result.body.cmds[0].value == false
+        assert result.thread != null
+        return post("/app/save", uiInput())
+    ).then((duplicate)
+        assert duplicate.status == 409
+        assert duplicate.body.reason == "AlreadyConsumed"
+        db = new sqlite/DatabaseSync(@database)
+        try
+            query = db.prepare("SELECT COUNT(*) AS total FROM visits")
+            row = query.get()
+            assert row.total == 1
+        finally
+            db.close()
+        println("PASS Piscina dispatches a synchronous UI handler with form/context and SQLite replay protection")
+    )
+
+Harness:errors()
+    return post("/bad").then((result)
+        assert result.status == 500
+        assert result.body.error == "InternalServerError"
+        return post("/throw")
+    ).then((result)
+        assert result.status == 500
+        assert !to_json(result.body).includes("SensitiveWorkerDetail")
+        return post("/private")
+    ).then((result)
+        assert result.status == 401
+        return post("/info", null, "invalid")
+    ).then((result)
+        assert result.status == 401
+        return post("/missing")
+    ).then((result)
+        assert result.status == 404
+        return fetch("${@url}/info", {
+            method: "POST"
+            body: "{"
+        })
+    ).then((res)
+        assert res.status == 400
+        padding = "x"
+        return fetch("${@url}/info", {
+            method: "POST"
+            body: padding.repeat(5000)
+        })
+    ).then((res)
+        assert res.status == 413
+        println("PASS worker boundaries reject Promise handlers, malformed/oversized requests and invalid tokens without exposing errors")
+    )
+
+Harness:parallel()
+    @slow = post("/slow", {
+        milliseconds: 1000
+    })
+    return waitForFile(@marker, Date/now() + 10000).then(()
+        capture fs
+        @busyThread = fs.readFileSync(@marker, "utf8")
+        return health()
+    ).then(()
+        return otherWorker()
+    ).then(()
+        return logout()
+    ).then(()
+        return @slow
+    ).then((late)
+        assert late.status == 401
+        return post("/info")
+    ).then((result)
+        assert result.status == 401
+        println("PASS a blocked worker leaves HTTP and a second worker responsive; shared logout prevents late token renewal")
+    )
+
+Harness:queue()
+    @slowOne = post("/slow", {
+        milliseconds: 1000
+    })
+    @slowTwo = post("/slow", {
+        milliseconds: 1000
+        second: true
+    })
+    waiting = [waitForFile(@marker, Date/now() + 10000), waitForFile("${@marker}.second", Date/now() + 10000)]
+    return Promise/all(waiting).then(()
+        capture fs
+        assert fs.readFileSync(@marker, "utf8") != fs.readFileSync("${@marker}.second", "utf8")
+        return health()
+    ).then(()
+        left = post("/info")
+        right = post("/info")
+        return Promise/all([left, right])
+    ).then((results)
+        a = results[0].status
+        b = results[1].status
+        assert (a == 200 and b == 503) or (a == 503 and b == 200)
+        return Promise/all([@slowOne, @slowTwo])
+    ).then((results)
+        assert results[0].status == 200
+        assert results[1].status == 200
+        println("PASS two workers run concurrently; a bounded queue rejects overload while HTTP health remains responsive")
+    )
+
+Harness:health()
+    return fetch("${@url}/health").then((res)
+        capture fs
+        assert res.status == 200
+        assert fs.existsSync(@marker)
+    )
+
+Harness:otherWorker()
+    return post("/info").then((result)
+        assert result.status == 200
+        assert "${result.body.threadId}" != @busyThread
+        assert result.body.auth == false
+        assert result.body.path == "/info"
+    )
+
+Harness:logout()
+    return post("/_lango/logout").then((result)
+        assert result.status == 200
+        assert result.body.loggedOut == true
+        assert result.token == null
+    )
+
+Harness:stop()
+    if @host == null
+        cleanup(@directory)
+        return Promise/resolve()
+    directory = @directory
+    return @host.close().then(()
+        capture directory
+        cleanup(directory)
+    )
+
+cleanup(directory)
+    fs.rmSync(directory, {
+        recursive: true
+        force: true
+    })
+    return null
+
+waitForFile(file, deadline)
+    if fs.existsSync(file)
+        return Promise/resolve()
+    if Date/now() > deadline
+        throw "WorkerDidNotStart"
+    return delay().then(()
+        capture file
+        capture deadline
+        return waitForFile(file, deadline)
+    )
+
+delay()
+    pending = new Promise((resolve, reject)
+        setTimeout(resolve, 10)
+    )
+    return pending
+
+main(args)
+    harness = new Harness()
+    return harness.start().then(()
+        capture harness
+        return harness.bootstrap()
+    ).then(()
+        capture harness
+        return harness.ui()
+    ).then(()
+        capture harness
+        return harness.errors()
+    ).then(()
+        capture harness
+        return harness.queue()
+    ).then(()
+        capture harness
+        return harness.parallel()
+    ).finally(()
+        capture harness
+        return harness.stop()
+    )

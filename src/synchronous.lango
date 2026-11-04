@@ -1,0 +1,14 @@
+import js "node:util" as util
+
+export requireSync(value)
+
+requireSync(value)
+    if util/types/isPromise(value)
+        value.catch((error)
+            return null
+        )
+        throw "ApiSynchronousResultRequired"
+    if value != null
+        if is_kindof(value.then, Function)
+            throw "ApiSynchronousResultRequired"
+    return value

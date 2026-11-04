@@ -1,0 +1,50 @@
+import js "@lango-project/lango-api/workers" as workers
+import js "node:path" as path
+import js "node:fs" as fs
+import js "node:crypto" as crypto
+import js global process
+
+export main(args)
+
+main(args)
+    directory = path.resolve("data/worker-demo")
+    fs.mkdirSync(directory, {
+        recursive: true
+        mode: 448
+    })
+    keyFile = path.join(directory, "jwt.key")
+    if !fs.existsSync(keyFile)
+        fs.writeFileSync(keyFile, crypto/randomBytes(32), {
+            mode: 384
+            flag: "wx"
+        })
+    host = new workers/WorkerHost({
+        appRoot: path.resolve(".")
+        application: path.resolve("dist/worker-demo-app.mjs")
+        stateFile: path.join(directory, "runtime.sqlite")
+        namespace: "worker-demo"
+        host: "127.0.0.1"
+        port: 8081
+        threads: 2
+        maxQueue: 64
+        tokens: {
+            issuer: "worker-demo"
+            audience: "worker-demo"
+            activeKeyId: "current"
+            keys: {
+                current: fs.readFileSync(keyFile)
+            }
+        }
+        options: {
+        }
+    })
+    process.once("SIGINT", ()
+        capture host
+        host.close()
+    )
+    process.once("SIGTERM", ()
+        capture host
+        host.close()
+    )
+    println("Starting the worker demo at http://127.0.0.1:8081")
+    return host.start()

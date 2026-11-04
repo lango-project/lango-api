@@ -7,9 +7,24 @@ import js global Math
 import js "node:crypto" as crypto
 import js "node:util" as util
 import js "jose" as jose
+import js "jsonwebtoken" as jwt
+import js "node:buffer" as buffer
+import "./synchronous"
+    requireSync(value)
 
 
 export class TokenService
+    methods
+        sign(claims)
+        verify(token)
+        verifySigned(token)
+        restart(token)
+        startSession(token)
+        recoverClient(token)
+        revoke(claims)
+        checkSession(claims)
+
+export class SyncTokenService
     methods
         sign(claims)
         verify(token)
@@ -51,6 +66,16 @@ MemorySessionRevocations:isRevoked(sessionId)
     return true
 
 TokenService(options)
+    settings = tokenSettings(options)
+    @issuer = settings.issuer
+    @audience = settings.audience
+    @activeKeyId = settings.activeKeyId
+    @ttl = settings.ttl
+    @sessionTtl = settings.sessionTtl
+    @keys = settings.keys
+    @revocations = settings.revocations
+
+tokenSettings(options)
     if !is_string(options.issuer) or options.issuer == ""
         throw "ApiTokenIssuerRequired"
     if !is_string(options.audience) or options.audience == ""
@@ -74,20 +99,24 @@ TokenService(options)
         sessionTtl = 28800
     if !is_number(sessionTtl) or sessionTtl < 1 or sessionTtl > 2592000 or sessionTtl % 1 != 0
         throw "ApiTokenSessionLifetimeMustBeBetween1And2592000Seconds"
-    @issuer = options.issuer
-    @audience = options.audience
-    @activeKeyId = options.activeKeyId
-    @ttl = ttl
-    @sessionTtl = sessionTtl
-    @keys = {
+    keysCopy = {
     }
-    @revocations = options.revocations
-    if @revocations == null
-        @revocations = new MemorySessionRevocations()
-    if !is_kindof(@revocations.revoke, Function) or !is_kindof(@revocations.isRevoked, Function)
+    for keys as id: key
+        keysCopy[id] = new Uint8Array(key)
+    revocations = options.revocations
+    if revocations == null
+        revocations = new MemorySessionRevocations()
+    if !is_kindof(revocations.revoke, Function) or !is_kindof(revocations.isRevoked, Function)
         throw "ApiTokenRevocationsStoreRequired"
-    for options.keys as id: key
-        @keys[id] = new Uint8Array(key)
+    return {
+        issuer: options.issuer
+        audience: options.audience
+        activeKeyId: options.activeKeyId
+        ttl: ttl
+        sessionTtl: sessionTtl
+        keys: keysCopy
+        revocations: revocations
+    }
 
 TokenService:sign(claims)
     if not is_object(claims)
@@ -308,3 +337,142 @@ recoveredClientId(verified, issuer, audience)
     if !is_string(claims.clientId) or claims.clientId == "" or claims.clientId.length > 128
         throw "ApiInvalidToken"
     return claims.clientId
+
+SyncTokenService(options)
+    @settings = tokenSettings(options)
+
+SyncTokenService:sign(claims)
+    settings = @settings
+    if not is_object(claims)
+        throw "ApiTokenClaimsMustBeMap"
+    payload = {
+    }
+    for claims as name: value
+        if name == "__proto__" or name == "constructor" or name == "prototype"
+            throw "ApiTokenReservedClaimName"
+        payload[name] = value
+    if payload.auth == null
+        payload.auth = false
+    if not is_bool(payload.auth)
+        throw "ApiTokenAuthMustBeBoolean"
+    if payload.clientId == null
+        payload.clientId = crypto/randomUUID()
+    if payload.sessionId == null
+        payload.sessionId = crypto/randomUUID()
+    requireTokenIdentity(payload)
+    if payload.sessionStartedAt == null and payload.sessionExpiresAt == null
+        stampSession(payload, settings.sessionTtl)
+    now = Math/floor(Date/now() / 1000)
+    deadline = sessionDeadline(payload, settings.sessionTtl)
+    payload.iss = settings.issuer
+    payload.aud = settings.audience
+    payload.iat = now
+    payload.exp = Math/min(now + settings.ttl, deadline)
+    payload.jti = crypto/randomUUID()
+    checkSession(payload)
+    keys = settings.keys
+    keyId = settings.activeKeyId
+    key = keys[keyId]
+    token = jwt/default/sign(payload, buffer/Buffer/from(key), {
+        algorithm: "HS256"
+        header: {
+            typ: "lango+jwt"
+            kid: settings.activeKeyId
+        }
+    })
+    checkSession(payload)
+    return token
+
+SyncTokenService:checkSession(claims)
+    settings = @settings
+    sessionDeadline(claims, settings.sessionTtl)
+    revoked = requireSync(settings.revocations.isRevoked(claims.sessionId))
+    if !is_bool(revoked) or revoked
+        throw "ApiInvalidToken"
+    sessionDeadline(claims, settings.sessionTtl)
+    return null
+
+SyncTokenService:revoke(claims)
+    if !is_object(claims) or !is_string(claims.sessionId) or claims.sessionId == ""
+        throw "ApiTokenSessionRequired"
+    settings = @settings
+    return requireSync(settings.revocations.revoke(claims.sessionId, Date/now() / 1000 + settings.ttl + 5))
+
+SyncTokenService:readSigned(token, recovery)
+    settings = @settings
+    if !is_string(token) or token.length > 16384
+        throw "ApiInvalidToken"
+    decoded = jwt/default/decode(token, {
+        complete: true
+    })
+    if !is_object(decoded) or !is_object(decoded.header)
+        throw "ApiInvalidToken"
+    header = decoded.header
+    if header.alg != "HS256" or header.typ != "lango+jwt" or !is_string(header.kid)
+        throw "ApiInvalidToken"
+    if header.crit != null or header.b64 != null
+        throw "ApiInvalidToken"
+    keys = settings.keys
+    keyId = header.kid
+    key = keys[keyId]
+    if !util/types/isUint8Array(key)
+        throw "ApiInvalidToken"
+    options = {
+        algorithms: ["HS256"]
+        issuer: settings.issuer
+        audience: settings.audience
+        clockTolerance: 5
+        ignoreExpiration: recovery
+        ignoreNotBefore: recovery
+    }
+    if !recovery
+        options.maxAge = settings.ttl
+    claims = jwt/default/verify(token, buffer/Buffer/from(key), options)
+    if not is_object(claims)
+        throw "ApiInvalidToken"
+    if !recovery
+        if !is_number(claims.iat) or !is_number(claims.exp) or !is_string(claims.jti)
+            throw "ApiInvalidToken"
+        if claims.iat > Date/now() / 1000 + 5
+            throw "ApiInvalidToken"
+    return {
+        payload: claims
+        protectedHeader: header
+    }
+
+SyncTokenService:verifySigned(token)
+    return readSigned(token, false)
+
+SyncTokenService:verify(token)
+    try
+        claims = verifiedPayload(verifySigned(token))
+        checkSession(claims)
+        return claims
+    catch error
+        throw "ApiInvalidToken"
+
+SyncTokenService:recoverClient(token)
+    verified = readSigned(token, true)
+    settings = @settings
+    claims = verified.payload
+    if claims.iss != settings.issuer or claims.aud != settings.audience
+        throw "ApiInvalidToken"
+    if !is_string(claims.clientId) or claims.clientId == "" or claims.clientId.length > 128
+        throw "ApiInvalidToken"
+    return claims.clientId
+
+SyncTokenService:startSession(token)
+    identity = null
+    try
+        identity = recoveredIdentity(recoverClient(token))
+    catch error
+        identity = newIdentity()
+    settings = @settings
+    return {
+        claims: restartedClaims(identity.clientId, settings.sessionTtl)
+        registered: identity.registered
+    }
+
+SyncTokenService:restart(token)
+    session = startSession(token)
+    return session.claims

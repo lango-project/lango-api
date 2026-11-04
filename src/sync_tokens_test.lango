@@ -1,0 +1,160 @@
+import js global Promise
+import js global Date
+import js global Reflect
+import js global Math
+import js "node:crypto" as crypto
+import js "node:buffer" as buffer
+import js "jsonwebtoken" as jwt
+import "./tokens"
+    class TokenService
+    class SyncTokenService
+    class MemorySessionRevocations
+
+export main(args)
+
+main(args)
+    options = {
+        issuer: "worker-test"
+        audience: "worker-test"
+        activeKeyId: "current"
+        keys: {
+            current: crypto/randomBytes(32)
+        }
+        revocations: new MemorySessionRevocations()
+    }
+    sync = new SyncTokenService(options)
+    asyncService = new TokenService(options)
+    token = sync.sign({
+        clientId: "client"
+        sessionId: "session"
+        auth: true
+    })
+    assert is_string(token)
+    claims = sync.verify(token)
+    assert claims.auth == true
+    assert claims.clientId == "client"
+    failed = false
+    try
+        sync.verify("${token}invalid")
+    catch error
+        failed = true
+    assert failed
+    return asyncService.verify(token).then((verified)
+        capture asyncService
+        assert verified.sessionId == "session"
+        return asyncService.sign({
+            clientId: "client"
+            sessionId: "other"
+            auth: true
+        })
+    ).then((other)
+        capture sync
+        capture options
+        assert sync.verify(other).sessionId == "other"
+        sync.revoke({
+            sessionId: "session"
+        })
+        failed = false
+        try
+            sync.verify(sync.sign({
+                clientId: "client"
+                sessionId: "session"
+            }))
+        catch error
+            failed = true
+        assert failed
+        assert sync.verify(other).auth == true
+        restarted = sync.startSession(other)
+        assert restarted.claims.clientId == "client"
+        assert restarted.claims.auth == false
+        assert restarted.claims.sessionId != "other"
+        assert !restarted.registered
+        checkSecurity(options)
+        checkInvalid(options)
+        println("PASS synchronous JWTs interoperate with jose, preserve identity, revoke sessions and reject invalid claims")
+    )
+
+checkInvalid(options)
+    service = new SyncTokenService(options)
+    failed = false
+    try
+        service.sign({
+            clientId: "client"
+            sessionId: "expired"
+            sessionStartedAt: 1
+            sessionExpiresAt: 2
+        })
+    catch error
+        failed = true
+    assert failed
+    options.revocations = {
+        isRevoked: asynchronous
+        revoke: asynchronous
+    }
+    service = new SyncTokenService(options)
+    failed = false
+    try
+        service.sign({
+            clientId: "client"
+            sessionId: "async"
+        })
+    catch error
+        failed = true
+    assert failed
+    return null
+
+asynchronous(input)
+    return Promise/resolve(false)
+
+checkSecurity(options)
+    service = new SyncTokenService(options)
+    original = service.verify(service.sign({
+        clientId: "client"
+        sessionId: "security"
+    }))
+    claims = null
+    for ["iat", "exp", "jti"] as field
+        claims = from_json(to_json(original))
+        Reflect/deleteProperty(claims, field)
+        token = signed(options, claims, "HS256", "lango+jwt", field == "iat")
+        rejected(service, token)
+    rejected(service, signed(options, original, "HS384", "lango+jwt", false))
+    rejected(service, signed(options, original, "HS256", "JWT", false))
+    for ["iss", "aud", "auth"] as field
+        claims = from_json(to_json(original))
+        claims[field] = "invalid"
+        rejected(service, signed(options, claims, "HS256", "lango+jwt", false))
+    claims = from_json(to_json(original))
+    claims.exp = Math/floor(Date/now() / 1000) - 30
+    expired = signed(options, claims, "HS256", "lango+jwt", false)
+    rejected(service, expired)
+    assert service.recoverClient(expired) == "client"
+    restarted = service.startSession(expired)
+    assert restarted.claims.auth == false
+    assert restarted.claims.sessionId != "security"
+    claims = from_json(to_json(original))
+    claims.iat = Math/floor(Date/now() / 1000) + 60
+    rejected(service, signed(options, claims, "HS256", "lango+jwt", false))
+    println("PASS synchronous JWT validation pins headers, required claims, issuer/audience, expiry and future issuance; recovery keeps only client identity")
+    return null
+
+signed(options, claims, algorithm, typ, noTimestamp)
+    keys = options.keys
+    key = keys.current
+    return jwt/default/sign(claims, buffer/Buffer/from(key), {
+        algorithm: algorithm
+        noTimestamp: noTimestamp
+        header: {
+            kid: options.activeKeyId
+            typ: typ
+        }
+    })
+
+rejected(service, token)
+    failed = false
+    try
+        service.verify(token)
+    catch error
+        failed = true
+    assert failed
+    return null

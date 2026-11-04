@@ -642,3 +642,111 @@ restart rebuilds it before the API host begins listening.
 ## Lisans
 
 Apache-2.0
+
+## Synchronous worker prototype
+
+An opt-in Piscina host is available through `@lango-project/lango-api/workers`.
+The existing `Host` and CLI retain their current behavior. This prototype proves
+synchronous request execution; it does not yet replace the default server.
+
+The HTTP listener stays on the main thread. A bounded pool runs at most one
+request per worker at a time. Each worker loads the application's compiled
+module, calls its exported `createWorker(options)` factory once, and retains the
+returned routes. The factory returns a map with `routes: routes.values()` and
+optional synchronous `register`, `start`, and `close` functions. Construct routes,
+module objects, and closures inside this factory; functions and live server
+objects are not transferred between threads.
+
+A worker establishes `context request`, `response`, `token`, `state`, and `log`.
+Handlers, authorization callbacks, and register/start hooks execute synchronously.
+Returned Promises and thenables are rejected rather than synchronously waited on.
+The transport and initial module loading still use Promises at their boundaries.
+Worker logging currently uses the standard default logger.
+
+`startWorkers(configuration)` returns a Promise for a `WorkerHost`. Alternatively,
+construct `WorkerHost` and call `start()`. Its `server` and `pool` properties expose
+the underlying HTTP server and Piscina instance. `close()` stops new requests,
+waits for accepted HTTP requests, and closes the pool. Application `close` hooks
+are worker-exit cleanup; forced termination must not be relied on to complete
+application cleanup or transactions.
+
+Configuration:
+
+- `application`: absolute path to the compiled application module exporting
+  `createWorker(options)`.
+- `appRoot`: application package directory, used to locate the package's
+  `worker-entry` export. `workerFile` may explicitly override that entry with an
+  absolute compiled filename.
+- `stateFile`: absolute SQLite filename shared by every worker; `namespace` and
+  `maxForms` use the existing state-store defaults.
+- `tokens`: `issuer`, `audience`, `activeKeyId`, `keys` containing byte arrays,
+  and optional `ttlSeconds`/`sessionTtlSeconds`. Keys are supplied once by the
+  parent; keep them stable across restarts. Revocation uses the shared SQLite
+  store automatically.
+- `options`: structured-cloneable application factory settings.
+- `host`, `port`: HTTP bind address and port.
+- `threads`: fixed pool size, default 2, maximum 128.
+- `maxQueue`: maximum waiting tasks, default 64; overload returns 503.
+- `bodyLimit`: maximum request-body bytes, default 1048576; excess returns 413.
+
+Only plain request metadata and body text enter the worker. Status, headers and
+serialized JSON leave it. The HTTP API supports POST routes, bootstrap at
+`/_lango/start`, logout at `/_lango/logout`, and main-thread GET `/health` liveness.
+Worker routes must use direct handlers or preloaded module objects. JWT renewal
+preserves protected identity fields and rechecks session revocation after handler
+execution. A logout in another worker therefore prevents a late response from
+renewing that session. UI replay claims and logout records share SQLite rather
+than independent worker memory.
+
+`SyncTokenService`, exported from `@lango-project/lango-api/tokens`, provides the
+existing token operations as synchronous values through `jsonwebtoken`'s
+synchronous API. HS256, token type/key selection, issuer/audience, required claims,
+absolute session limits, and revocation remain checked. Its JWTs interoperate
+with the existing `jose` service. Expired signed tokens can recover only client
+identity during bootstrap; authentication and session identity start fresh.
+
+For UI handlers, create the dispatcher inside the worker factory:
+
+```lango
+dispatcher = new ui/Dispatcher(appRoot, {
+    synchronous: true
+})
+```
+
+Pass direct functions or preloaded modules to its event registrations. This mode
+uses synchronous replay adapters and returns the ordinary UI result directly.
+Handlers can use `context form` and write `form.saveButton.enabled = false`
+without a Promise chain.
+
+Run the standalone API example from this repository with the current compiler:
+
+```sh
+npm run build:worker-demo
+npm run demo:workers
+```
+
+Then, from another terminal:
+
+```sh
+curl http://127.0.0.1:8081/health
+curl -X POST http://127.0.0.1:8081/hello \
+  -H 'Content-Type: application/json' -d '{"name":"Lango"}'
+```
+
+The demo keeps its reusable JWT key and SQLite state in `data/worker-demo`.
+The application handler is in `examples/worker-app.lango`; the transport launcher
+is in `examples/worker-server.lango`. Both are Lango source.
+
+`npm test` includes synchronous JWT compatibility and validation tests.
+`npm run test:workers` additionally builds the sibling `../lango-ui` project and
+runs a real two-worker HTTP/UI/SQLite integration test. It checks replay,
+Promise rejection, request limits, simultaneous workers, queue overload,
+main-thread health responsiveness, and cross-worker logout during a running
+request. This integration test requires the local multi-repository workspace.
+
+Remaining integration includes the standard CLI/XML/environment configuration,
+linked-package preparation, string-module preloading, batch ping, request audit,
+and other asynchronous adapters. Streaming, sockets, arbitrary parent-process
+instances, background asynchronous jobs, and automatic retry after a worker
+crash are outside this prototype. A failed request can already have committed
+application changes; neither worker termination nor an HTTP error rolls them back.

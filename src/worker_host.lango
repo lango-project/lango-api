@@ -1,0 +1,238 @@
+import js global Promise
+import js global Buffer
+import js global structuredClone
+import js "node:crypto" as crypto
+import js "node:http" as http
+import js "node:path" as path
+import js "node:module" as nodeModule
+import js "piscina" as piscina
+
+export startWorkers(configuration)
+
+export class WorkerHost
+    properties
+        server
+        pool
+    methods
+        start()
+        receive(req, res)
+        submit(req, res, body, requestId)
+        close()
+
+startWorkers(configuration)
+    host = new WorkerHost(configuration)
+    return host.start()
+
+WorkerHost(configuration)
+    if !is_string(configuration.application) or !path.isAbsolute(configuration.application)
+        throw "ApiWorkerApplicationMustBeAbsolute"
+    if !is_string(configuration.stateFile) or !path.isAbsolute(configuration.stateFile)
+        throw "ApiWorkerStateFileMustBeAbsolute"
+    @configuration = configuration
+    @closing = null
+    @stopping = false
+    @maxQueue = positiveOption(configuration.maxQueue, 64)
+    @bodyLimit = positiveOption(configuration.bodyLimit, 1048576)
+    threads = positiveOption(configuration.threads, 2)
+    if threads > 128
+        throw "ApiWorkerThreadLimit"
+    workerFile = configuration.workerFile
+    if workerFile == null
+        resolver = nodeModule/createRequire(path.join(configuration.appRoot, "package.json"))
+        workerFile = resolver.resolve("@lango-project/lango-api/worker-entry")
+    if !is_string(workerFile) or !path.isAbsolute(workerFile)
+        throw "ApiWorkerEntryMustBeAbsolute"
+    data = structuredClone({
+        application: configuration.application
+        stateFile: configuration.stateFile
+        namespace: configuration.namespace
+        maxForms: configuration.maxForms
+        tokens: configuration.tokens
+        options: configuration.options
+    })
+    pool = new piscina/Piscina({
+        filename: workerFile
+        name: "execute"
+        minThreads: threads
+        maxThreads: threads
+        maxQueue: @maxQueue
+        concurrentTasksPerWorker: 1
+        idleTimeout: 60000
+        closeTimeout: 30000
+        workerData: data
+    })
+    @pool = pool
+    pool.on("error", (error)
+        context log
+        log.err("Worker pool failed")
+    )
+    server = new http/Server((req, res)
+        receive(req, res)
+    )
+    @server = server
+
+positiveOption(value, fallback)
+    if value == null
+        return fallback
+    if !is_number(value) or value < 1 or value > 9007199254740991 or value % 1 != 0
+        throw "ApiWorkerRequiresPositiveInteger"
+    return value
+
+WorkerHost:start()
+    ready = @pool.run({
+        ready: true
+    })
+    return ready.then(()
+        listening = new Promise((resolve, reject)
+            configuration = @configuration
+            server = @server
+            server.once("error", reject)
+            server.listen(configuration.port, configuration.host, ()
+                capture resolve
+                capture reject
+                capture server
+                server.removeListener("error", reject)
+                resolve(@this)
+            )
+        )
+        return listening
+    ).catch((error)
+        return @pool.destroy().then(()
+            capture error
+            throw error
+        )
+    )
+
+WorkerHost:receive(req, res)
+    requestId = crypto/randomUUID()
+    if @stopping
+        return httpFailure(res, 503, "ServiceUnavailable", requestId)
+    if req.method == "GET" and req.url == "/health"
+        return sendHttp(res, {
+            status: 200
+            headers: {
+                "Content-Type": "application/json; charset=utf-8"
+                "Cache-Control": "no-store"
+            }
+            body: to_json({
+                status: "ok"
+            })
+        })
+    if req.method != "POST"
+        return httpFailure(res, 405, "MethodNotAllowed", requestId)
+    if req.url.includes("?")
+        return httpFailure(res, 400, "QueryNotSupported", requestId)
+    chunks = []
+    size = 0
+    limit = @bodyLimit
+    req.on("data", (chunk)
+        capture chunks
+        capture size
+        capture limit
+        capture res
+        capture requestId
+        size = size + chunk.length
+        if size > limit
+            if !res.writableEnded
+                httpFailure(res, 413, "RequestTooLarge", requestId)
+          else
+              chunks.add(chunk)
+    )
+    req.on("end", ()
+        capture chunks
+        capture req
+        capture res
+        capture requestId
+        if !res.writableEnded and !res.destroyed
+            body = Buffer/concat(chunks).toString("utf8")
+            if body == ""
+                body = "{}"
+            submit(req, res, body, requestId)
+    )
+    req.on("error", (error)
+        capture res
+        capture requestId
+        if !res.writableEnded and !res.destroyed
+            httpFailure(res, 400, "BadRequest", requestId)
+    )
+    return null
+
+WorkerHost:submit(req, res, body, requestId)
+    if @stopping or @pool.queueSize >= @maxQueue
+        return httpFailure(res, 503, "ServiceUnavailable", requestId)
+    task = {
+        request: {
+            id: requestId
+            method: req.method
+            path: req.url
+            headers: req.headers
+            remoteAddress: req.socket.remoteAddress
+        }
+        body: body
+    }
+    pool = @pool
+    pool.run(task).then((result)
+        capture res
+        if !res.writableEnded and !res.destroyed
+            sendHttp(res, result)
+    ).catch((error)
+        capture res
+        capture requestId
+        if !res.writableEnded and !res.destroyed
+            code = 500
+            message = "InternalServerError"
+            if error.message == "Task queue is at limit" or error.message == "No task queue available and all Workers are busy"
+                code = 503
+                message = "ServiceUnavailable"
+            httpFailure(res, code, message, requestId)
+    )
+    return null
+
+WorkerHost:close()
+    if @closing != null
+        return @closing
+    @stopping = true
+    server = @server
+    drained = new Promise((resolve, reject)
+        capture server
+        if !server.listening
+            resolve()
+          else
+              server.once("close", ()
+                  capture resolve
+                  resolve()
+              )
+              server.close()
+    )
+    @closing = closePool(drained, @pool)
+    return @closing
+
+closePool(drained, pool)
+    return drained.then(()
+        capture pool
+        return pool.close()
+    ).catch((error)
+        capture pool
+        return pool.destroy().then(()
+            capture error
+            throw error
+        )
+    )
+
+sendHttp(res, result)
+    res.writeHead(result.status, result.headers)
+    res.end(result.body)
+    return null
+
+httpFailure(res, status, error, requestId)
+    return sendHttp(res, {
+        status: status
+        headers: {
+            "Content-Type": "application/json; charset=utf-8"
+            "Cache-Control": "no-store"
+        }
+        body: to_json({
+            error: error
+            requestId: requestId
+        })
+    })
