@@ -138,6 +138,16 @@ checkInvalidClaims(key)
     }, {
         auth: true
         sessionStartedAt: now
+    }, {
+        auth: true
+        clientId: 9
+        sessionStartedAt: now
+        sessionExpiresAt: now + 120
+    }, {
+        auth: true
+        sessionId: ""
+        sessionStartedAt: now
+        sessionExpiresAt: now + 120
     }]
     return invalidNext(service, key, cases, 0)
 
@@ -157,8 +167,10 @@ invalidNext(service, key, cases, index)
     )
 
 rawToken(key, claims)
-    claims.clientId = "stable-client"
-    claims.sessionId = "old-session"
+    if claims.clientId == null
+        claims.clientId = "stable-client"
+    if claims.sessionId == null
+        claims.sessionId = "old-session"
     signer = new jose/SignJWT(claims)
     signer.setProtectedHeader({
         alg: "HS256"

@@ -378,6 +378,14 @@ claims are renewed, so a partially failed login cannot grant authentication.
 `clientId`, `sessionId`, `sessionStartedAt`, and `sessionExpiresAt` are fixed for
 the request and cannot be changed by mutating the context. Token-bearing
 responses use `Cache-Control: no-store`.
+Protected identities are also restored after a successful auth callback, before
+the endpoint handler runs. Client and session IDs must be nonempty strings of
+at most 128 characters when signing or verifying tokens.
+
+UI Dispatcher endpoints use this verified session identity for their replay
+store, together with the incoming form instance and sequence. Generic API
+endpoints are not automatically deduplicated. Request audit fields remain
+client-supplied correlation data; see the `lango-ui` event replay contract.
 
 With tokens enabled, `POST /_lango/start` is reserved for bootstrap. It accepts
 the previous bearer token, recovers only clientId after verifying its signature,

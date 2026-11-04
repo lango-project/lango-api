@@ -105,6 +105,7 @@ TokenService:sign(claims)
         payload.clientId = crypto/randomUUID()
     if payload.sessionId == null
         payload.sessionId = crypto/randomUUID()
+    requireTokenIdentity(payload)
     if payload.sessionStartedAt == null and payload.sessionExpiresAt == null
         stampSession(payload, @sessionTtl)
     now = Math/floor(Date/now() / 1000)
@@ -211,7 +212,15 @@ TokenService:verifySigned(token)
 verifiedPayload(verified)
     if not is_bool(verified.payload.auth)
         throw "ApiInvalidToken"
+    requireTokenIdentity(verified.payload)
     return verified.payload
+
+requireTokenIdentity(claims)
+    if !is_string(claims.clientId) or claims.clientId == "" or claims.clientId.length > 128
+        throw "ApiInvalidToken"
+    if !is_string(claims.sessionId) or claims.sessionId == "" or claims.sessionId.length > 128
+        throw "ApiInvalidToken"
+    return null
 
 TokenService:restart(token)
     return this.startSession(token).then((session)

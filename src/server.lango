@@ -29,6 +29,7 @@ class ApiResponse
         send(value)
         completed()
         bindToken(claims)
+        restoreTokenIdentity()
         discardTokenChanges()
         write(body, token)
         signingFailed(error = null)
@@ -84,6 +85,14 @@ ApiResponse:discardTokenChanges()
         @claims = @originalClaims
     return null
 
+ApiResponse:restoreTokenIdentity()
+    if @claims != null
+        @claims.clientId = @clientId
+        @claims.sessionId = @sessionId
+        @claims.sessionStartedAt = @sessionStartedAt
+        @claims.sessionExpiresAt = @sessionExpiresAt
+    return null
+
 ApiResponse:status(code)
     if !is_number(code) or code < 100 or code > 599 or code % 1 != 0
         throw "ApiResponseStatusMustBeAnIntegerBetween100And599"
@@ -107,11 +116,7 @@ ApiResponse:send(value)
     body = to_json(value)
     @completed = true
     reply = this
-    if @claims != null
-        @claims.clientId = @clientId
-        @claims.sessionId = @sessionId
-        @claims.sessionStartedAt = @sessionStartedAt
-        @claims.sessionExpiresAt = @sessionExpiresAt
+    this.restoreTokenIdentity()
     if @logout != null
         @claims.auth = false
         return @logout.then(()
@@ -493,6 +498,7 @@ dispatchRequest(claims, route, input, configuration)
         capture token
         capture log
         if allowed and !response.completed()
+            response.restoreTokenIdentity()
             return invokeRoute(route, input, appRoot)
     )
 

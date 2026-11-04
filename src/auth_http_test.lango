@@ -196,6 +196,10 @@ loginHandler(input)
 
 privateHandler(input)
     context token
+    assert token.clientId != "must-not-change-client"
+    assert token.sessionId != "must-not-change-session"
+    assert token.sessionStartedAt != 0
+    assert token.sessionExpiresAt != 0
     return {
         auth: token.auth
         clientId: token.clientId
@@ -229,6 +233,8 @@ allowPolicy(path, input)
     assert request.path == path
     assert is_object(input)
     token.policyChecked = true
+    token.clientId = "must-not-change-client"
+    token.sessionId = "must-not-change-session"
     token.sessionStartedAt = 0
     token.sessionExpiresAt = 0
     return true
