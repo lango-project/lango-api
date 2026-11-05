@@ -1,0 +1,24 @@
+import js "node:crypto" as crypto
+import js "node:worker_threads" as threads
+
+export save(input)
+
+global moduleId = crypto/randomUUID()
+
+save(input)
+    global moduleId
+    context form
+    context token
+    context request
+    context response
+    context state
+    context log
+    assert !state.isClosed()
+    assert is_string(token.clientId)
+    assert request.path == "/app/save"
+    form.email.value = "Saved: ${form.email.value}"
+    form.saveButton.enabled = false
+    response.header("X-Worker-Thread", "${threads.threadId}")
+    return {
+        moduleId: moduleId
+    }

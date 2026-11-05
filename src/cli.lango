@@ -10,7 +10,6 @@ import "./configuration"
     applyOptionConfiguration(configuration, options)
     loadConfiguration(applicationName, configurationFile, paths)
     validateConfiguration(configuration)
-    workersEnabled(configuration)
 import "./library"
     class Host
 
@@ -21,7 +20,7 @@ export configurationFileFor(paths, options, environment)
 export apiFileFor(configuration, options, environment)
 
 usage()
-    return "Usage: lango-api <app> [development|server] [--app-root <path>] [--data-dir <path>] [--state-dir <path>] [--log-dir <path>] [--config <file>] [--api <file>] [--host <host>] [--port <port>] [--jwt-enabled true|false] [--jwt-issuer <issuer>] [--jwt-audience <audience>] [--jwt-keys <file>] [--jwt-key-id <id>] [--jwt-ttl <seconds>] [--jwt-session-ttl <seconds>] [--state-backend memory|sqlite] [--state-file <file>] [--state-namespace <name>] [--state-max-forms <n>] [--workers true|false] [--worker-application <file>] [--worker-threads <n>] [--worker-max-queue <n>] [--worker-body-limit <bytes>] [--worker-entry <file>] [--worker-options <file>]"
+    return "Usage: lango-api <app> [development|server] [--app-root <path>] [--data-dir <path>] [--state-dir <path>] [--log-dir <path>] [--config <file>] [--api <file>] [--host <host>] [--port <port>] [--jwt-enabled true|false] [--jwt-issuer <issuer>] [--jwt-audience <audience>] [--jwt-keys <file>] [--jwt-key-id <id>] [--jwt-ttl <seconds>] [--jwt-session-ttl <seconds>] [--state-backend sqlite] [--state-file <file>] [--state-namespace <name>] [--state-max-forms <n>] [--workers true] [--worker-application <file>] [--worker-threads <n>] [--worker-max-queue <n>] [--worker-body-limit <bytes>] [--worker-timeout <ms>] [--worker-startup-timeout <ms>] [--worker-shutdown-timeout <ms>] [--worker-entry <file>] [--worker-options <file>]"
 
 newOptions(applicationName)
     return {
@@ -51,6 +50,9 @@ newOptions(applicationName)
         workerThreads: null
         workerMaxQueue: null
         workerBodyLimit: null
+        workerTimeout: null
+        workerStartupTimeout: null
+        workerShutdownTimeout: null
         workerEntry: null
         workerOptions: null
     }
@@ -67,6 +69,12 @@ setOption(options, option, value)
           options.workerMaxQueue = value
       case "--worker-body-limit"
           options.workerBodyLimit = value
+      case "--worker-timeout"
+          options.workerTimeout = value
+      case "--worker-startup-timeout"
+          options.workerStartupTimeout = value
+      case "--worker-shutdown-timeout"
+          options.workerShutdownTimeout = value
       case "--worker-entry"
           options.workerEntry = value
       case "--worker-options"
@@ -115,7 +123,7 @@ knownOption(option)
     standard = ["--app-root", "--data-dir", "--state-dir", "--log-dir", "--config", "--api", "--host", "--port"]
     jwt = ["--jwt-enabled", "--jwt-issuer", "--jwt-audience", "--jwt-keys", "--jwt-key-id", "--jwt-ttl", "--jwt-session-ttl"]
     state = ["--state-backend", "--state-file", "--state-namespace", "--state-max-forms"]
-    workers = ["--workers", "--worker-application", "--worker-threads", "--worker-max-queue", "--worker-body-limit", "--worker-entry", "--worker-options"]
+    workers = ["--workers", "--worker-application", "--worker-threads", "--worker-max-queue", "--worker-body-limit", "--worker-timeout", "--worker-startup-timeout", "--worker-shutdown-timeout", "--worker-entry", "--worker-options"]
     return standard.includes(option) or jwt.includes(option) or state.includes(option) or workers.includes(option)
 
 parseArguments(args)
@@ -182,14 +190,12 @@ main(args)
         configuration = loadConfiguration(options.applicationName, configurationFile, paths)
         applyEnvironmentConfiguration(configuration, process.env)
         applyOptionConfiguration(configuration, options)
+        configuration.mode = options.mode
         validateConfiguration(configuration)
         host = new Host(configuration)
-        if workersEnabled(configuration)
-            if options.apiFile != null or is_string(process.env.LANGO_API) or configuration.apiFile != null
-                throw "ApiWorkerRoutesMustBeCreatedInFactory"
-          else
-              apiFile = apiFileFor(configuration, options, process.env)
-              host.routesFromXml(apiFile)
+        if options.apiFile != null or is_string(process.env.LANGO_API) or configuration.apiFile != null
+            apiFile = apiFileFor(configuration, options, process.env)
+            host.routesFromXml(apiFile)
         return host.start().then((server)
             capture configuration
             capture log
@@ -288,3 +294,9 @@ test "CLI parses worker settings and requires explicit values"
             assert error == "ApiOptionRequiresValue: ${option}"
             rejected = true
         assert rejected
+
+test "CLI accepts worker deadline options"
+    options = parseArguments(["shop", "--worker-timeout", "1000", "--worker-startup-timeout", "2000", "--worker-shutdown-timeout", "3000"])
+    assert options.workerTimeout == "1000"
+    assert options.workerStartupTimeout == "2000"
+    assert options.workerShutdownTimeout == "3000"

@@ -162,6 +162,9 @@ applyEnvironmentConfiguration(configuration, environment)
         LANGO_WORKER_THREADS: "threads"
         LANGO_WORKER_MAX_QUEUE: "maxQueue"
         LANGO_WORKER_BODY_LIMIT: "bodyLimit"
+        LANGO_WORKER_TIMEOUT: "requestTimeoutMs"
+        LANGO_WORKER_STARTUP_TIMEOUT: "startupTimeoutMs"
+        LANGO_WORKER_SHUTDOWN_TIMEOUT: "shutdownTimeoutMs"
         LANGO_WORKER_ENTRY: "workerFile"
         LANGO_WORKER_OPTIONS: "optionsFile"
     }
@@ -212,6 +215,9 @@ applyOptionConfiguration(configuration, options)
         workerThreads: "threads"
         workerMaxQueue: "maxQueue"
         workerBodyLimit: "bodyLimit"
+        workerTimeout: "requestTimeoutMs"
+        workerStartupTimeout: "startupTimeoutMs"
+        workerShutdownTimeout: "shutdownTimeoutMs"
         workerEntry: "workerFile"
         workerOptions: "optionsFile"
     }
@@ -349,6 +355,9 @@ workerInteger(value, name)
         throw "ApiWorkerInvalidInteger: ${name}"
     if name == "threads" and parsed > 128
         throw "ApiWorkerThreadLimit"
+    if name == "requestTimeoutMs" or name == "startupTimeoutMs" or name == "shutdownTimeoutMs"
+        if parsed > 2147483647
+            throw "ApiWorkerTimeoutLimit"
     return parsed
 
 setWorker(configuration, name, value)
@@ -366,12 +375,15 @@ setWorker(configuration, name, value)
       case "threads"
       case "maxQueue"
       case "bodyLimit"
+      case "requestTimeoutMs"
+      case "startupTimeoutMs"
+      case "shutdownTimeoutMs"
           parsed = workerInteger(value, name)
     settings[name] = parsed
     return null
 
 applyXmlWorkers(configuration, tag)
-    allowed = ["enabled", "application", "threads", "maxQueue", "bodyLimit", "workerFile", "optionsFile"]
+    allowed = ["enabled", "application", "threads", "maxQueue", "bodyLimit", "requestTimeoutMs", "startupTimeoutMs", "shutdownTimeoutMs", "workerFile", "optionsFile"]
     if configuration.workers == null
         setWorker(configuration, "enabled", true)
     for tag.attributes() as name: value
@@ -385,27 +397,34 @@ applyXmlWorkers(configuration, tag)
 workersEnabled(configuration)
     settings = configuration.workers
     if settings == null
-        return false
+        return true
     if !is_object(settings)
         throw "ApiWorkersMustBeMap"
     if settings.enabled != null and !is_bool(settings.enabled)
         throw "ApiWorkerEnabledMustBeBoolean"
-    return settings.enabled != false
+    if settings.enabled == false
+        throw "ApiWorkersRequired"
+    return true
 
 validateWorkers(configuration)
-    if !workersEnabled(configuration)
-        return configuration
+    workersEnabled(configuration)
+    if configuration.workers == null
+        configuration.workers = {
+        }
     settings = configuration.workers
     defaults = {
-        application: "dist/worker.mjs"
+        application: null
         threads: 2
         maxQueue: 64
         bodyLimit: 1048576
+        requestTimeoutMs: 30000
+        startupTimeoutMs: 30000
+        shutdownTimeoutMs: 30000
     }
     for defaults as name: value
         if settings[name] == null
             settings[name] = value
-    for ["threads", "maxQueue", "bodyLimit"] as name
+    for ["threads", "maxQueue", "bodyLimit", "requestTimeoutMs", "startupTimeoutMs", "shutdownTimeoutMs"] as name
         settings[name] = workerInteger(settings[name], name)
     for ["application", "workerFile", "optionsFile"] as name
         value = settings[name]
@@ -420,7 +439,7 @@ validateWorkers(configuration)
 
 test "worker settings follow XML environment and CLI precedence with defaults"
     configuration = defaultConfiguration("shop")
-    assert !workersEnabled(configuration)
+    assert workersEnabled(configuration)
     xml = <conf>
         <workers application="dist/xml.mjs" threads="3" maxQueue="9" bodyLimit="2048" optionsFile="worker.json" />
     </conf>
@@ -447,19 +466,23 @@ test "worker settings follow XML environment and CLI precedence with defaults"
         workersEnabled: "true"
     })
     validateWorkers(defaults)
-    assert defaults.workers.application == "dist/worker.mjs"
+    assert defaults.workers.application == null
     assert defaults.workers.threads == 2
     assert defaults.workers.maxQueue == 64
     assert defaults.workers.bodyLimit == 1048576
 
-test "workers can be disabled without reading their application and option files"
+test "worker execution is the default and cannot be disabled"
     configuration = defaultConfiguration("shop")
-    applyXmlConfiguration(configuration, <conf><workers application="missing.mjs" optionsFile="missing.json" /></conf>)
-    applyOptionConfiguration(configuration, {
-        workersEnabled: "false"
-    })
     validateWorkers(configuration)
-    assert !workersEnabled(configuration)
+    assert workersEnabled(configuration)
+    configuration.workers.enabled = false
+    rejected = false
+    try
+        validateWorkers(configuration)
+    catch error
+        assert error == "ApiWorkersRequired"
+        rejected = true
+    assert rejected
 
 test "worker XML rejects unknown attributes duplicate sections and invalid limits"
     configuration = defaultConfiguration("shop")
@@ -496,3 +519,33 @@ test "worker XML rejects unknown attributes duplicate sections and invalid limit
         assert false
     catch error
         assert error == "ApiWorkerEnabledMustBeBoolean"
+
+test "worker deadlines follow XML environment and CLI precedence and timer limits"
+    configuration = defaultConfiguration("deadlines")
+    applyXmlConfiguration(configuration, <conf><workers requestTimeoutMs="900" startupTimeoutMs="800" shutdownTimeoutMs="700" /></conf>)
+    applyEnvironmentConfiguration(configuration, {
+        LANGO_WORKER_TIMEOUT: "600"
+        LANGO_WORKER_STARTUP_TIMEOUT: "500"
+    })
+    applyOptionConfiguration(configuration, {
+        workerTimeout: "400"
+        workerShutdownTimeout: "300"
+    })
+    validateWorkers(configuration)
+    assert configuration.workers.requestTimeoutMs == 400
+    assert configuration.workers.startupTimeoutMs == 500
+    assert configuration.workers.shutdownTimeoutMs == 300
+    defaults = defaultConfiguration("defaults")
+    validateWorkers(defaults)
+    assert defaults.workers.requestTimeoutMs == 30000
+    assert defaults.workers.startupTimeoutMs == 30000
+    assert defaults.workers.shutdownTimeoutMs == 30000
+    for [0, -1, 1.5, 2147483648] as invalid
+        rejected = false
+        try
+            applyOptionConfiguration(defaults, {
+                workerTimeout: invalid
+            })
+        catch error
+            rejected = true
+        assert rejected

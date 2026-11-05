@@ -1,0 +1,391 @@
+import js global Date
+import js global Promise
+import js "node:crypto" as crypto
+import js "node:fs" as fs
+import js "node:os" as os
+import js "node:path" as path
+import "./worker_runtime"
+    class WorkerRuntime
+import "./tokens"
+    class TokenService
+import "./library"
+    class Routes
+
+export main(args)
+
+global events = []
+global audits = []
+global calls = 0
+
+factory(options)
+    routes = new Routes()
+    routes.endpoint({
+        path: "/login"
+        function: login
+        anonymous: true
+    })
+    routes.endpoint({
+        path: "/public"
+        function: echo
+        anonymous: true
+    })
+    routes.endpoint({
+        path: "/private"
+        function: echo
+    })
+    routes.endpoint({
+        path: "/guard"
+        function: echo
+        anonymous: true
+        auth: guard
+    })
+    routes.endpoint({
+        path: "/module"
+        module: {
+            echo: echo
+        }
+        function: "echo"
+        anonymous: true
+        auth: {
+            module: new Policy()
+            function: "allow"
+        }
+    })
+    return {
+        routes: routes.values()
+        register: register
+        start: started
+        ping: ping
+        request: audit
+    }
+
+register(input)
+    global events
+    context token
+    events.add("register")
+    token.registered = true
+    token.clientId = "restore"
+    token.sessionId = "restore"
+    token.sessionStartedAt = 1
+    token.sessionExpiresAt = 2
+    assert is_string(input.timestamp)
+    input.clientId = "mutated"
+
+started(input)
+    global events
+    context token
+    events.add("start")
+    assert token.clientId == input.clientId
+    assert token.sessionId == input.sessionId
+    assert token.sessionStartedAt == input.sessionStartedAt
+    assert token.sessionExpiresAt == input.sessionExpiresAt
+    token.started = true
+
+login(input)
+    context token
+    token.auth = true
+    return {
+        loggedIn: true
+    }
+
+guard(input)
+    context token
+    switch input.mode
+      case "deny"
+          token.auth = true
+          return false
+      case "throw"
+          throw "PrivateAuthorizationError"
+      case "promise"
+          return Promise/resolve(true)
+      case "invalid"
+          return "yes"
+    token.clientId = "restore"
+    return true
+
+echo(input)
+    global calls
+    context token
+    context request
+    context response
+    context state
+    calls++
+    assert !state.isClosed()
+    assert is_string(request.id)
+    if input != null
+        switch input.mode
+          case "throw"
+              token.auth = true
+              throw "PrivateHandlerError"
+          case "promise"
+              return Promise/resolve(null)
+          case "expire"
+              context token
+              deadline = token.sessionExpiresAt
+              freeze = ()
+                  capture deadline
+                  return deadline * 1000
+              Date.now = freeze
+          case "logout"
+              response.logout()
+          case "send"
+              response.send(input)
+              input.afterSend = true
+              token.afterSend = true
+              return null
+    return {
+        clientId: token.clientId
+        auth: token.auth
+    }
+
+ping(input)
+    context token
+    context response
+    assert !response.completed()
+    assert input.formId == token.formId
+    token.pinged = true
+    token.clientId = "restore"
+    token.seqno = 999
+
+audit(input)
+    global audits
+    context token
+    context response
+    context request
+    assert response.completed()
+    assert response.statusCode == input.status
+    assert request.headers.authorization == null
+    assert request.headers.cookie == null
+    audits.add({
+        metadata: from_json(to_json(input))
+        token: from_json(to_json(token))
+    })
+    token.auditOnly = true
+    input.output.auditOnly = true
+    if input.input != null
+        source = input.input
+        if source.mode == "send"
+            response.send("must-not-send")
+
+invoke(runtime, endpoint, input = null, token = null)
+    headers = {
+        "content-type": "application/json"
+        cookie: "secret"
+    }
+    if token != null
+        headers.authorization = "Bearer ${token}"
+    result = runtime.handle({
+        request: {
+            id: crypto/randomUUID()
+            method: "POST"
+            path: endpoint
+            headers: headers
+            remoteAddress: "127.0.0.1"
+        }
+        body: to_json(input)
+    })
+    result.json = from_json(result.body)
+    result.token = result.headers["X-Lango-Token"]
+    return result
+
+checkAuth(runtime, service)
+    global calls
+    assert invoke(runtime, "/private").status == 401
+    assert invoke(runtime, "/public", null, "invalid").status == 401
+    assert invoke(runtime, "/missing").status == 404
+    issued = invoke(runtime, "/public")
+    assert issued.status == 200
+    claims = service.verify(issued.token)
+    assert !claims.auth
+    assert claims.registered
+    assert claims.started
+    before = calls
+    denied = invoke(runtime, "/guard", {
+        mode: "deny"
+    }, issued.token)
+    assert denied.status == 403
+    assert calls == before
+    assert !service.verify(denied.token).auth
+    failed = null
+    for ["throw", "promise", "invalid"] as mode
+        failed = invoke(runtime, "/guard", {
+            mode: mode
+        }, issued.token)
+        assert failed.status == 500
+        assert failed.json.error == "InternalServerError"
+        assert calls == before
+        assert !service.verify(failed.token).auth
+    allowed = invoke(runtime, "/guard", {
+    }, issued.token)
+    assert allowed.status == 200
+    restored = service.verify(allowed.token)
+    assert restored.clientId == claims.clientId
+    assert invoke(runtime, "/module", null, issued.token).status == 200
+    authenticated = invoke(runtime, "/login")
+    assert invoke(runtime, "/private", null, authenticated.token).status == 200
+    for ["throw", "promise"] as mode
+        failed = invoke(runtime, "/public", {
+            mode: mode
+        }, issued.token)
+        assert failed.status == 500
+        assert !service.verify(failed.token).auth
+    println("PASS shared runtime enforces authentication, boolean authorization, handler failures, protected identity and synchronous module dispatch")
+
+checkLifecycle(runtime, service)
+    global events
+    events = []
+    fresh = invoke(runtime, "/_lango/start")
+    assert to_json(events) == to_json(["register", "start"])
+    original = service.verify(fresh.token)
+    events = []
+    restarted = invoke(runtime, "/_lango/start", null, fresh.token)
+    assert to_json(events) == to_json(["start"])
+    claims = service.verify(restarted.token)
+    assert claims.clientId == original.clientId
+    assert claims.sessionId != original.sessionId
+    assert !claims.auth
+    println("PASS bootstrap registration and restart preserve only client identity and isolate lifecycle metadata")
+
+checkExpiry(runtime)
+    token = invoke(runtime, "/public").token
+    original = Date.now
+    try
+        expired = invoke(runtime, "/public", {
+            mode: "expire"
+        }, token)
+        assert expired.status == 401
+        assert expired.token == null
+    finally
+        Date.now = original
+    println("PASS expiry during handler execution prevents signing a late response")
+
+checkLogout(runtime, service)
+    issued = invoke(runtime, "/login")
+    loggedOut = invoke(runtime, "/_lango/logout", null, issued.token)
+    assert loggedOut.status == 200
+    assert loggedOut.token == null
+    assert invoke(runtime, "/private", null, issued.token).status == 401
+    recovered = invoke(runtime, "/_lango/start", null, issued.token)
+    first = service.verify(issued.token)
+    next = service.verify(recovered.token)
+    assert next.clientId == first.clientId
+    assert next.sessionId != first.sessionId
+    assert !next.auth
+    handlerLogout = invoke(runtime, "/public", {
+        mode: "logout"
+    }, recovered.token)
+    assert handlerLogout.status == 200
+    assert handlerLogout.token == null
+    assert invoke(runtime, "/public", null, recovered.token).status == 401
+    println("PASS logout and response.logout revoke session tokens; recovery starts a new anonymous session")
+
+checkPing(runtime, service)
+    claims = service.verify(invoke(runtime, "/public").token)
+    claims.formId = "profile"
+    claims.seqno = 7
+    raw = service.sign(claims)
+    result = invoke(runtime, "/_lango/ping", {
+        forms: [{
+            formId: "profile"
+            token: raw
+        }]
+    })
+    assert result.status == 200
+    assert result.token == null
+    assert result.audit == null
+    renewed = service.verify(result.json.forms[0].token)
+    assert renewed.clientId == claims.clientId
+    assert renewed.seqno == 7
+    assert renewed.pinged
+    for [[], [{
+        formId: "profile"
+        token: "invalid"
+    }]] as forms
+        failed = invoke(runtime, "/_lango/ping", {
+            forms: forms
+        })
+        assert failed.status >= 400
+        assert failed.token == null
+    println("PASS synchronous batch ping renews form claims independently and preserves replay sequence")
+
+checkAudit(runtime, service)
+    global audits
+    sent = invoke(runtime, "/public", {
+        mode: "send"
+        formId: "profile"
+        seqno: 5
+        transactionId: "transaction"
+    })
+    snapshot = sent.audit
+    metadataRequest = {
+        id: "audit-request"
+        method: "POST"
+        path: "/public"
+        headers: {
+            authorization: "secret"
+            cookie: "secret"
+        }
+        remoteAddress: "127.0.0.1"
+    }
+    runtime.handle({
+        audit: {
+            request: metadataRequest
+            snapshot: snapshot
+            started: Date/now() - 10
+            finished: Date/now()
+        }
+    })
+    assert audits.length == 1
+    record = audits[0]
+    assert record.metadata.transactionId == "transaction"
+    assert record.metadata.formId == "profile"
+    assert record.metadata.seqno == 5
+    assert record.metadata.durationMs >= 0
+    output = sent.json
+    assert output.auditOnly == null
+    assert output.afterSend == null
+    original = service.verify(sent.token)
+    assert original.auditOnly == null
+    assert original.afterSend == null
+    println("PASS audit sees isolated completed snapshots, sanitized contexts and original input while callback errors cannot alter the sent response")
+
+main(args)
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), "lango-runtime-"))
+    key = crypto/randomBytes(32)
+    settings = {
+        issuer: "runtime-test"
+        audience: "browser"
+        activeKeyId: "current"
+        keys: {
+            current: key
+        }
+    }
+    service = new TokenService(settings)
+    runtime = new WorkerRuntime({
+        stateFile: path.join(directory, "runtime.sqlite")
+        tokens: settings
+    }, factory)
+    try
+        runtime.activate()
+        checkAuth(runtime, service)
+        checkLifecycle(runtime, service)
+        checkExpiry(runtime)
+        checkLogout(runtime, service)
+        checkPing(runtime, service)
+        checkAudit(runtime, service)
+    finally
+        runtime.close()
+        fs.rmSync(directory, {
+            recursive: true
+            force: true
+        })
+
+class Policy
+    methods
+        allow(input)
+
+Policy()
+    @allowed = true
+
+Policy:allow(input)
+    return @allowed

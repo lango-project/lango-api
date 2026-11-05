@@ -1,28 +1,27 @@
 import js "node:worker_threads" as threads
 import js global process
-import js global Function
-import "./worker_runtime"
-    class WorkerRuntime
+import "./worker_modules"
+    initializeWorker(data)
 
-export execute(task)
+export global execute
 
 global runtime = null
+global execute = initialize()
 
-execute(task)
-    global runtime
-    if runtime != null
-        return runtime.handle(task)
-    data = threads.workerData
-    return import_module(data.application).then((module)
-        capture data
-        capture task
+initialize()
+    return initializeWorker(threads.workerData).then((ready)
         global runtime
-        if !is_kindof(module.createWorker, Function)
-            throw "ApiWorkerFactoryRequired"
-        runtime = new WorkerRuntime(data, module.createWorker)
+        runtime = ready
         process.once("exit", ()
             global runtime
             runtime.close()
         )
-        return runtime.handle(task)
+        return workerHandler()
     )
+
+workerHandler()
+    return runTask
+
+runTask(task)
+    global runtime
+    return runtime.handle(task)

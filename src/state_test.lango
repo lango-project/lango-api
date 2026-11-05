@@ -1,6 +1,5 @@
 import js global Promise
 import js global Date
-import js global globalThis as host
 import js "node:fs" as fs
 import js "node:path" as path
 import js "node:os" as os
@@ -46,10 +45,8 @@ main(args)
             force: true
         })
         throw error
-    return checkTokens(file).then(()
-        capture file
-        return checkWorkers(file)
-    ).finally(()
+    checkTokens(file)
+    return checkWorkers(file).finally(()
         capture directory
         cleanup(directory)
     )
@@ -114,7 +111,7 @@ checkStores(file)
     println("PASS SQLite state persists revocations, completed sequences and crashed reservations; connections share state and namespaces remain isolated")
 
 checkExpiry(store, expiry)
-    original = host.Date.now
+    original = Date.now
     frozen = ()
         capture expiry
         return (expiry - 2000) * 1000
@@ -135,7 +132,7 @@ checkExpiry(store, expiry)
         replaceNow(original)
 
 replaceNow(callback)
-    host.Date.now = callback
+    Date.now = callback
 
 checkConfiguration(directory)
     conf = path.join(directory, "conf.xml")
@@ -238,57 +235,35 @@ checkTokens(file)
         namespace: "tokens"
     })
     key = crypto/randomBytes(32)
-    tokens = service(store, key)
-    return tokens.sign({
-        clientId: "stable-client"
-        sessionId: "revoked-session"
-        auth: true
-    }).then((token)
-        capture tokens
-        capture store
-        capture key
-        capture file
-        return revokeToken(tokens, store, key, file, token)
-    ).finally(()
-        capture store
+    try
+        tokens = service(store, key)
+        token = tokens.sign({
+            clientId: "stable-client"
+            sessionId: "revoked-session"
+            auth: true
+        })
+        tokens.revoke(tokens.verify(token))
+    finally
         store.close()
-    )
-
-revokeToken(tokens, store, key, file, token)
-    return tokens.verify(token).then((claims)
-        capture tokens
-        return tokens.revoke(claims)
-    ).then(()
-        capture store
-        capture file
-        capture key
-        capture token
-        store.close()
-        return verifyAfterRestart(file, key, token)
-    )
-
-verifyAfterRestart(file, key, token)
-    store = new SqliteStateStore(file, {
+    reopened = new SqliteStateStore(file, {
         namespace: "tokens"
     })
-    tokens = service(store, key)
-    return tokens.verify(token).then((claims)
-        throw "UnexpectedRevokedTokenAcceptance"
-    ).catch((error)
-        assert error == "ApiInvalidToken"
-    ).then(()
-        capture tokens
-        capture token
-        return tokens.restart(token)
-    ).then((claims)
+    try
+        tokens = service(reopened, key)
+        rejected = false
+        try
+            tokens.verify(token)
+        catch error
+            assert error == "ApiInvalidToken"
+            rejected = true
+        assert rejected
+        claims = tokens.restart(token)
         assert claims.clientId == "stable-client"
         assert claims.sessionId != "revoked-session"
         assert !claims.auth
-        println("PASS a revoked JWT remains invalid after reopening the database while bootstrap still recovers only client identity")
-    ).finally(()
-        capture store
-        store.close()
-    )
+        println("PASS a revoked JWT remains invalid after reopening the database while bootstrap recovers only client identity")
+    finally
+        reopened.close()
 
 checkWorkers(file)
     return Promise/all([worker(file), worker(file)]).then((results)

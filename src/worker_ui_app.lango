@@ -1,0 +1,28 @@
+import js "../../lango-ui/dist/library.mjs" as ui
+import "./library"
+    class Routes
+
+export createWorker(options)
+
+global dispatcher = null
+
+createWorker(options)
+    global dispatcher
+    dispatcher = new ui/Dispatcher(options.appRoot, {
+        synchronous: true
+    })
+    dispatcher.routesFromXml(options.uiFile)
+    routes = new Routes()
+    routes.endpoint({
+        path: "/app/*"
+        function: handleEvent
+        anonymous: true
+    })
+    return {
+        routes: routes.values()
+        preload: [dispatcher]
+    }
+
+handleEvent(input)
+    global dispatcher
+    return dispatcher.handle(input)

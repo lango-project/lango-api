@@ -3,12 +3,9 @@ import js "node:fs" as fs
 import js "node:module" as nodeModule
 import js "node:path" as path
 import js "node:process" as process
-import "./authorization"
-    createAuth(spec)
 
-export prepareLinkedPackages(appRoot, routes)
+export prepareWorkerPackages(appRoot)
 export resolveModule(appRoot, moduleName)
-export validateRouteModules(appRoot, routes)
 
 packageDirectory(appRoot, moduleName)
     return path.join(appRoot, "node_modules", moduleName)
@@ -47,75 +44,9 @@ buildLinkedPackage(appRoot, moduleName)
         throw "LangoLinkedPackageBuildDidNotProduceOutput: ${moduleName}"
     return null
 
-prepareLinkedPackages(appRoot, routes)
-    prepared = []
-    targets = validationTargets(routes)
-    for targets as route
-        packageName = linkedPackageName(route.mod)
-        if packageName != null and !prepared.includes(packageName)
-            buildLinkedPackage(appRoot, packageName)
-            prepared.add(packageName)
-    return null
-
-linkedPackageName(moduleName)
-    if not is_string(moduleName)
-        return null
-    if path.isAbsolute(moduleName) or moduleName.startsWith(".") or moduleName.startsWith("node:")
-        return null
-    parts = moduleName.split("/")
-    if moduleName.startsWith("@") and parts.length >= 2
-        return "${parts[0]}/${parts[1]}"
-    return parts[0]
-
 resolveModule(appRoot, moduleName)
     resolver = nodeModule/createRequire(path.resolve(appRoot, "package.json"))
     return resolver.resolve(moduleName)
-
-validateRouteModules(appRoot, routes)
-    return validateRouteModuleAt(appRoot, validationTargets(routes), 0)
-
-validationTargets(routes)
-    targets = []
-    for routes as route
-        targets.add(route)
-        auth = createAuth(route.auth)
-        if auth != null
-            if is_string(auth.function)
-                moduleName = null
-                moduleValue = auth.module
-                if is_string(auth.module)
-                    moduleName = auth.module
-                    moduleValue = null
-                targets.add({
-                    path: "${route.path} (auth)"
-                    mod: moduleName
-                    module: moduleValue
-                    func: auth.function
-                })
-    return targets
-
-moduleExportsFunction(module, name)
-    return is_kindof(module[name], Function)
-
-validateRouteModuleAt(appRoot, routes, index)
-    if index >= routes.length
-        return import_module("node:fs")
-    route = routes[index]
-    if not is_string(route.mod)
-        if is_string(route.func) and route.module != null
-            if not moduleExportsFunction(route.module, route.func)
-                throw "ApiHandlerNotExported: ${route.path} -> ${route.func}"
-        return validateRouteModuleAt(appRoot, routes, index + 1)
-    moduleFile = resolveModule(appRoot, route.mod)
-    return import_module(moduleFile).then((module)
-        capture appRoot
-        capture routes
-        capture index
-        capture route
-        if not moduleExportsFunction(module, route.func)
-            throw "ApiHandlerNotExported: ${route.path} -> ${route.mod}.${route.func}"
-        return validateRouteModuleAt(appRoot, routes, index + 1)
-    )
 
 test "Lango package manifests require a source, output and build script"
     settings = langoBuild({
@@ -139,26 +70,17 @@ test "module resolution uses the application package context"
     assert resolveModule("/tmp/lango-app", "node:fs") == "node:fs"
     assert resolveModule(".", "node:fs") == "node:fs"
 
-test "linked builds use package roots and skip file and native module references"
-    assert linkedPackageName("@shop/hooks/register") == "@shop/hooks"
-    assert linkedPackageName("hooks/register") == "hooks"
-    assert linkedPackageName("node:fs") == null
-    assert linkedPackageName(path.resolve("hooks.mjs")) == null
-    assert linkedPackageName("./hooks.mjs") == null
-
-test "startup rejects a missing auth module export"
-    handler = (input)
-        return input
-    try
-        validateRouteModules("/tmp", [{
-            path: "/private"
-            handler: handler
-            auth: {
-                module: {
-                }
-                function: "missing"
-            }
-        }])
-        assert false
-    catch error
-        assert error == "ApiHandlerNotExported: /private (auth) -> missing"
+prepareWorkerPackages(appRoot)
+    directory = path.join(appRoot, "node_modules")
+    if !fs.existsSync(directory)
+        return null
+    for fs.readdirSync(directory) as name
+        if name.startsWith(".")
+            continue
+        if name.startsWith("@")
+            scope = path.join(directory, name)
+            for fs.readdirSync(scope) as member
+                buildLinkedPackage(appRoot, "${name}/${member}")
+          else
+              buildLinkedPackage(appRoot, name)
+    return null

@@ -1,0 +1,100 @@
+import js global Promise
+import js global process
+import js global Date
+import js global Atomics
+import js global Int32Array
+import js global SharedArrayBuffer
+import js "node:crypto" as crypto
+import js "node:fs" as fs
+import js "node:worker_threads" as threads
+import "./library"
+    class Routes
+
+export createWorker(options)
+
+global settings = null
+global identity = crypto/randomUUID()
+
+createWorker(options)
+    global settings
+    global identity
+    settings = options
+    if options.hangStartup == true
+        hang()
+    fs.appendFileSync(options.boots, "${identity}\n")
+    routes = new Routes()
+    for ["/info", "/reserve", "/gate", "/crash"] as endpoint
+        routes.endpoint({
+            path: endpoint
+            function: handle
+            anonymous: true
+        })
+    resources = null
+    if options.hangStartup == "preload"
+        resources = [{
+            preload: neverPreload
+        }]
+    return {
+        routes: routes.values()
+        request: audited
+        preload: resources
+    }
+
+handle(input)
+    global settings
+    global identity
+    context request
+    context token
+    context state
+    fs.appendFileSync(settings.effects, "${request.path}\n")
+    if is_object(input)
+        if input.order != null
+            fs.appendFileSync(settings.order, "${input.order}\n")
+    signal = null
+    switch request.path
+      case "/gate"
+          fs.writeFileSync(settings.gate, "entered")
+          signal = new Int32Array(new SharedArrayBuffer(4))
+          loop while !fs.existsSync(settings.release)
+              Atomics/wait(signal, 0, 0, 5)
+      case "/crash"
+          fs.writeFileSync(settings.gate, "entered")
+          signal = new Int32Array(new SharedArrayBuffer(4))
+          loop while !fs.existsSync(settings.release)
+              Atomics/wait(signal, 0, 0, 5)
+          process.exit(23)
+      case "/reserve"
+          key = to_json([token.sessionId, "profile", "instance"])
+          outcome = state.claim(key, input.seqno, token.sessionExpiresAt)
+          if outcome != "Accepted"
+              return {
+                  outcome: outcome
+              }
+          fs.writeFileSync(settings.gate, "reserved")
+          if input.mode == "hang"
+              hang()
+          if input.mode == "crash"
+              process.exit(23)
+          state.complete(key, input.seqno)
+    return {
+        boot: identity
+        thread: threads.threadId
+    }
+
+hang()
+    signal = new Int32Array(new SharedArrayBuffer(4))
+    loop
+        Atomics/wait(signal, 0, 0, 1000)
+
+audited(input)
+    global settings
+    if is_object(input.input)
+        body = input.input
+        if body.auditHang == true
+            fs.writeFileSync(settings.audit, "entered")
+            hang()
+    return null
+
+neverPreload()
+    pending = Promise/withResolvers()
+    return pending.promise

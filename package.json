@@ -29,31 +29,36 @@
     "README.md",
     "LICENSE",
     "NOTICE",
-    "examples/*.lango"
+    "examples/*.lango",
+    "tools/*.lango",
+    "benchmarks/*.md",
+    "benchmarks/*.json"
   ],
   "scripts": {
     "build": "lango build src/cli.lango --out dist/cli.mjs --executable && lango build src/tokens.lango --out dist/tokens.mjs && lango build src/worker_host.lango --out dist/worker_host.mjs && lango build src/worker_entry.lango --out dist/worker_entry.mjs",
-    "test": "lango test src/cli.lango --build-dir .test-output/source && npm run test:tokens && npm run test:http && npm run test:ping && npm run test:revocation && npm run test:state && npm run test:worker-host",
+    "test": "lango test src/cli.lango --build-dir .test-output/source && npm run test:tokens && npm run test:runtime && npm run test:state && npm run test:worker-host && npm run test:resilience",
     "test:tokens": "lango build src/tokens_test.lango --out .test-output/tokens_test.mjs --executable && node .test-output/tokens_test.mjs && lango build src/session_lifetime_test.lango --out .test-output/session_lifetime_test.mjs --executable && node .test-output/session_lifetime_test.mjs && lango build src/sync_tokens_test.lango --out .test-output/sync_tokens_test.mjs --executable && node .test-output/sync_tokens_test.mjs",
-    "test:http": "lango build src/auth_http_test.lango --out .test-output/auth_http_test.mjs --executable && node .test-output/auth_http_test.mjs && npm run test:lifecycle",
-    "test:lifecycle": "lango build src/lifecycle_http_test.lango --out .test-output/lifecycle_http_test.mjs --executable && node .test-output/lifecycle_http_test.mjs && npm run test:audit",
-    "test:audit": "lango build src/request_audit_test.lango --out .test-output/request_audit_test.mjs --executable && node .test-output/request_audit_test.mjs",
-    "test:ping": "lango build src/ping_test.lango --out .test-output/ping_test.mjs --executable && node .test-output/ping_test.mjs",
-    "test:revocation": "lango build src/revocation_test.lango --out .test-output/revocation_test.mjs --executable && node .test-output/revocation_test.mjs",
-    "test:state": "lango build src/state_test.lango --out .test-output/state_test.mjs --executable && node .test-output/state_test.mjs && lango build src/state_http_test.lango --out .test-output/state_http_test.mjs --executable && node .test-output/state_http_test.mjs",
-    "test:workers": "npm run build && lango build ../lango-ui/src/library.lango --out ../lango-ui/dist/library.mjs && lango build src/worker_fixture.lango --out .test-output/worker_fixture.mjs && lango build src/worker_http_test.lango --out .test-output/worker_http_test.mjs --executable && node .test-output/worker_http_test.mjs",
+    "test:state": "lango build src/state_test.lango --out .test-output/state_test.mjs --executable && node .test-output/state_test.mjs",
+    "test:workers": "npm run build && npm run test:http-support && lango build ../lango-ui/src/library.lango --out ../lango-ui/dist/library.mjs && lango build src/worker_fixture.lango --out .test-output/worker_fixture.mjs && lango build src/worker_http_test.lango --out .test-output/worker_http_test.mjs --executable && node .test-output/worker_http_test.mjs && npm run test:worker-ui",
     "build:worker-demo": "npm run build && lango build examples/worker-app.lango --out dist/worker-demo-app.mjs && lango build examples/worker-server.lango --out dist/worker-demo-server.mjs --executable",
     "demo:workers": "node dist/worker-demo-server.mjs",
-    "test:worker-host": "lango build src/cli.lango --out .test-output/worker-cli.mjs --executable && lango build src/worker_entry.lango --out .test-output/worker_entry.mjs && lango build src/worker_config_fixture.lango --out .test-output/worker_config_fixture.mjs && lango build src/worker_host_test.lango --out .test-output/worker_host_test.mjs --executable && node .test-output/worker_host_test.mjs"
+    "test:worker-host": "npm run test:http-support && lango build src/cli.lango --out .test-output/worker-cli.mjs --executable && lango build src/worker_entry.lango --out .test-output/worker_entry.mjs && lango build src/worker_config_fixture.lango --out .test-output/worker_config_fixture.mjs && lango build src/worker_xml_fixture.lango --out .test-output/worker_xml_fixture.mjs && lango build src/worker_host_test.lango --out .test-output/worker_host_test.mjs --executable && node .test-output/worker_host_test.mjs && lango build src/worker_xml_test.lango --out .test-output/worker_xml_test.mjs --executable && node .test-output/worker_xml_test.mjs && npm run test:worker-events",
+    "test:worker-events": "lango build src/worker_entry.lango --out .test-output/worker_entry.mjs && lango build src/worker_events_fixture.lango --out .test-output/worker_events_fixture.mjs && lango build src/worker_events_test.lango --out .test-output/worker_events_test.mjs --executable && node .test-output/worker_events_test.mjs",
+    "test:worker-ui": "lango build src/worker_entry.lango --out .test-output/worker_entry.mjs && lango build src/worker_ui_app.lango --out .test-output/worker_ui_app.mjs && lango build src/worker_ui_fixture.lango --out .test-output/worker_ui_fixture.mjs && lango build src/worker_ui_test.lango --out .test-output/worker_ui_test.mjs --executable && node .test-output/worker_ui_test.mjs",
+    "test:runtime": "lango build src/runtime_test.lango --out .test-output/runtime_test.mjs --executable && node .test-output/runtime_test.mjs",
+    "prebuild": "lango run tools/clean.lango",
+    "test:http-support": "lango build src/http_test_server.lango --out .test-output/http_test_server.mjs --executable && lango build src/http_test_client.lango --out .test-output/http_test_client.mjs --executable",
+    "test:resilience": "npm run test:http-support && lango build src/worker_entry.lango --out .test-output/worker_entry.mjs && lango build src/resilience_fixture.lango --out .test-output/resilience_fixture.mjs && lango build src/resilience_test.lango --out .test-output/resilience_test.mjs --executable && node .test-output/resilience_test.mjs",
+    "bench:workers": "npm run test:http-support && lango build src/worker_entry.lango --out .test-output/worker_entry.mjs && lango build src/load_fixture.lango --out .test-output/load_fixture.mjs && lango build src/load_client.lango --out .test-output/load_client.mjs --executable && lango build src/load_workers.lango --out .test-output/load_workers.mjs --executable && node .test-output/load_workers.mjs"
   },
   "devDependencies": {
-    "@lango-project/lango-js": "^0.1.8"
+    "@lango-project/lango-js": "^0.1.8",
+    "jose": "^6.2.14"
   },
   "engines": {
     "node": ">=24"
   },
   "dependencies": {
-    "jose": "^6.2.14",
     "jsonwebtoken": "^9.0.3",
     "piscina": "^5.3.2"
   }

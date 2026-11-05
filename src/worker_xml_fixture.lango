@@ -1,0 +1,69 @@
+import js "node:crypto" as crypto
+import js "node:worker_threads" as threads
+
+export info(input)
+export authorize(input)
+export registered(input)
+export started(input)
+export createWorker(options)
+export broken(input)
+
+global moduleId = crypto/randomUUID()
+
+createWorker(options)
+    return {
+        routes: [{
+            path: "/factory"
+            handler: info
+            anonymous: true
+        }]
+        register: registered
+        start: started
+    }
+
+registered(input)
+    context token
+    context state
+    assert !state.isClosed()
+    assert is_string(input.timestamp)
+    assert input.queryString == ""
+    token.registered = true
+    token.clientId = "must-be-restored"
+    token.sessionId = "must-be-restored"
+    token.sessionExpiresAt = 1
+    input.clientId = "metadata-must-not-leak"
+    return null
+
+started(input)
+    context token
+    assert token.clientId == input.clientId
+    assert token.sessionId == input.sessionId
+    assert token.sessionExpiresAt == input.sessionExpiresAt
+    token.started = true
+    return null
+
+authorize(input)
+    context token
+    if input.allow != true
+        token.auth = true
+        return false
+    return true
+
+info(input)
+    global moduleId
+    context request
+    context token
+    return {
+        moduleId: moduleId
+        threadId: threads.threadId
+        registered: token.registered
+        started: token.started
+        auth: token.auth
+        clientId: token.clientId
+        path: request.path
+    }
+
+broken(input)
+    context token
+    token.auth = true
+    throw "SensitiveLifecycleFailure"

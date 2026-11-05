@@ -1,0 +1,59 @@
+import js global Date
+import js global process
+import js "node:sqlite" as sqlite
+import "./library"
+    class Routes
+
+export createWorker(options)
+
+global database = null
+global delay = 0
+
+createWorker(options)
+    global database
+    global delay
+    delay = options.workMs
+    database = new sqlite/DatabaseSync(options.database)
+    database.exec("PRAGMA busy_timeout = 5000")
+    routes = new Routes()
+    routes.endpoint({
+        path: "/work"
+        function: work
+        anonymous: true
+    })
+    routes.endpoint({
+        path: "/memory"
+        function: memory
+        anonymous: true
+    })
+    return {
+        routes: routes.values()
+        close: cleanup
+    }
+
+work(input)
+    global database
+    global delay
+    context request
+    statement = database.prepare("INSERT INTO visits(id) VALUES (?)")
+    statement.run(request.id)
+    end = Date/now() + delay
+    loop while Date/now() < end
+        spin()
+    return {
+        ok: true
+    }
+
+spin()
+    return null
+
+memory(input)
+    usage = process.memoryUsage()
+    return {
+        rss: usage.rss
+    }
+
+cleanup(input)
+    global database
+    database.close()
+    return null

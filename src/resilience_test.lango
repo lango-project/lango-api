@@ -1,0 +1,283 @@
+import js global Date
+import js global Atomics
+import js global Int32Array
+import js global SharedArrayBuffer
+import js "node:fs" as fs
+import js "node:os" as os
+import js "node:path" as path
+import js "node:crypto" as crypto
+import "./http_test_support"
+    class HttpTestServer
+    waitForTestFile(file, deadline)
+
+export main(args)
+
+class Harness
+    methods
+        start(timeout = 1500, shutdown = 30000, startup = 5000, hangStartup = false, unbounded = false)
+        crash()
+        timeout()
+        queuedTimeout()
+        fifo()
+        startupTimeout()
+        auditTimeout()
+        shutdownTimeout()
+        stop()
+
+Harness()
+    @directory = fs.mkdtempSync(path.join(os.tmpdir(), "lango-resilience-"))
+    @host = new HttpTestServer(@directory)
+    @boots = path.join(@directory, "boots.txt")
+    @effects = path.join(@directory, "effects.txt")
+    @gate = path.join(@directory, "gate")
+    @release = path.join(@directory, "release")
+    @audit = path.join(@directory, "audit")
+    @order = path.join(@directory, "order")
+    @token = null
+
+Harness:start(timeout = 1500, shutdown = 30000, startup = 5000, hangStartup = false, unbounded = false)
+    for [@boots, @effects, @gate, @release, @audit, @order] as file
+        fs.rmSync(file, {
+            force: true
+        })
+    key = crypto/randomBytes(32)
+    configuration = {
+        appRoot: path.resolve(".")
+        application: path.resolve(".test-output/resilience_fixture.mjs")
+        workerFile: path.resolve(".test-output/worker_entry.mjs")
+        stateFile: path.join(@directory, "runtime.sqlite")
+        host: "127.0.0.1"
+        port: 0
+        threads: 1
+        maxQueue: 8
+        requestTimeoutMs: timeout
+        startupTimeoutMs: startup
+        shutdownTimeoutMs: shutdown
+        closeHost: true
+        options: {
+            boots: @boots
+            effects: @effects
+            gate: @gate
+            release: @release
+            audit: @audit
+            order: @order
+            hangStartup: hangStartup
+        }
+        tokens: {
+            issuer: "resilience"
+            audience: "browser"
+            activeKeyId: "current"
+            keys: {
+                current: key.toString("base64")
+            }
+        }
+    }
+    if unbounded
+        configuration.unboundedTask = {
+            request: {
+                id: "test-gate"
+                path: "/gate"
+                method: "POST"
+                headers: {
+                }
+                remoteAddress: "127.0.0.1"
+            }
+            body: "{}"
+        }
+    @host.start(configuration)
+    if !unbounded
+        issued = @host.request("/_lango/start", {
+        })
+        assert issued.status == 200
+        @token = issued.token
+
+health(host)
+    task = host.raw("/health", null, null, "GET")
+    return task.read()
+
+Harness:crash()
+    start()
+    before = @host.request("/info", null, @token)
+    crashed = @host.pending("/crash", null, @token)
+    waitForTestFile(@gate, Date/now() + 5000)
+    queued = @host.pending("/info", null, @token)
+    waitForQueue(@host)
+    fs.writeFileSync(@release, "release")
+    failed = crashed.read()
+    assert failed.status == 500
+    assert failed.body.error == "InternalServerError"
+    assert failed.token == null
+    recovered = queued.read()
+    assert recovered.status == 200
+    assert recovered.body.boot != before.body.boot
+    assert lines(@boots).length == 2
+    assert count(lines(@effects), "/crash") == 1
+    @host.stop()
+    println("PASS worker crash fails once without JWT/retry; queued work resumes on a replacement worker")
+
+Harness:timeout()
+    start()
+    before = @host.request("/info", null, @token)
+    failed = @host.request("/reserve", {
+        seqno: 1
+        mode: "hang"
+    }, @token)
+    assert failed.status == 504
+    assert failed.body.error == "GatewayTimeout"
+    assert failed.token == null
+    waitForBoots(@boots, 2)
+    after = @host.request("/info", null, @token)
+    assert after.status == 200
+    assert after.body.boot != before.body.boot
+    duplicate = @host.request("/reserve", {
+        seqno: 1
+    }, @token)
+    assert duplicate.body.outcome == "AlreadyConsumed"
+    next = @host.request("/reserve", {
+        seqno: 2
+    }, @token)
+    assert next.body.outcome == "InProgress"
+    assert count(lines(@effects), "/reserve") == 3
+    @host.stop()
+    start()
+    crashed = @host.request("/reserve", {
+        seqno: 1
+        mode: "crash"
+    }, @token)
+    assert crashed.status == 500
+    assert crashed.token == null
+    waitForBoots(@boots, 2)
+    crashDuplicate = @host.request("/reserve", {
+        seqno: 1
+    }, @token)
+    assert crashDuplicate.body.outcome == "AlreadyConsumed"
+    crashNext = @host.request("/reserve", {
+        seqno: 2
+    }, @token)
+    assert crashNext.body.outcome == "InProgress"
+    @host.stop()
+    println("PASS timed-out and crashed workers are replaced; interrupted durable reservations are never replayed or released")
+
+Harness:queuedTimeout()
+    start(300, 30000, 5000, false, true)
+    waitForTestFile(@gate, Date/now() + 5000)
+    failed = @host.request("/info", {
+    })
+    assert failed.status == 504
+    assert count(lines(@effects), "/info") == 0
+    assert lines(@boots).length == 1
+    fs.writeFileSync(@release, "release")
+    assert @host.request("/info", {
+    }).status == 200
+    assert lines(@boots).length == 1
+    @host.stop()
+    println("PASS queue deadlines remove unstarted tasks without executing them or terminating the healthy busy worker")
+
+Harness:startupTimeout()
+    for [true, "preload"] as mode
+        rejected = false
+        started = Date/now()
+        try
+            start(1500, 30000, 250, mode)
+        catch error
+            message = "${error}"
+            assert message.includes("ApiWorkerStartupTimeout")
+            rejected = true
+        finally
+            @host.stop()
+        assert rejected
+        assert Date/now() - started < 5000
+    println("PASS blocked factory and resource-preload startup are bounded and destroy their pools")
+
+Harness:auditTimeout()
+    start()
+    before = @host.request("/info", {
+        auditHang: true
+    }, @token)
+    assert before.status == 200
+    assert is_string(before.token)
+    waitForTestFile(@audit, Date/now() + 5000)
+    assert health(@host).status == 200
+    waitForBoots(@boots, 2)
+    assert @host.request("/info", null, @token).status == 200
+    @host.stop()
+    println("PASS a hung audit callback cannot hold the pool indefinitely or change its completed HTTP response")
+
+Harness:shutdownTimeout()
+    start(10000, 200)
+    pending = @host.pending("/gate", null, @token)
+    waitForTestFile(@gate, Date/now() + 5000)
+    started = Date/now()
+    @host.stop(1)
+    assert Date/now() - started < 5000
+    result = @host.lastExit
+    assert result.error == "ApiWorkerShutdownTimeout"
+    assert result.threads == 0
+    println("PASS shutdown bounds HTTP drain and kills a stuck worker; forced shutdown is reported explicitly")
+
+lines(file)
+    return fs.readFileSync(file, "utf8").trim().split("\n")
+
+count(values, expected)
+    result = 0
+    for values as value
+        if value == expected
+            result++
+    return result
+
+waitForBoots(file, expected)
+    signal = new Int32Array(new SharedArrayBuffer(4))
+    deadline = Date/now() + 5000
+    loop while lines(file).length < expected
+        if Date/now() > deadline
+            throw "WorkerWasNotReplaced"
+        Atomics/wait(signal, 0, 0, 10)
+
+waitForQueue(host, expected = 1)
+    deadline = Date/now() + 5000
+    loop
+        result = health(host)
+        assert result.status == 200
+        if result.body.queueSize >= expected
+            return null
+        if Date/now() > deadline
+            throw "RequestDidNotEnterQueue"
+
+Harness:stop()
+    try
+        fs.writeFileSync(@release, "cleanup")
+        @host.stop()
+    finally
+        fs.rmSync(@directory, {
+            recursive: true
+            force: true
+        })
+
+main(args)
+    harness = new Harness()
+    try
+        harness.crash()
+        harness.timeout()
+        harness.queuedTimeout()
+        harness.fifo()
+        harness.startupTimeout()
+        harness.auditTimeout()
+        harness.shutdownTimeout()
+    finally
+        harness.stop()
+
+Harness:fifo()
+    start(5000, 30000, 5000, false, true)
+    waitForTestFile(@gate, Date/now() + 5000)
+    pending = []
+    for range(3) as index
+        pending.add(@host.pending("/info", {
+            order: index
+        }))
+        waitForQueue(@host, index + 1)
+    fs.writeFileSync(@release, "release")
+    for pending as task
+        assert task.read().status == 200
+    assert fs.readFileSync(@order, "utf8") == "0\n1\n2\n"
+    @host.stop()
+    println("PASS queued requests retain FIFO admission order with cancellation enabled")

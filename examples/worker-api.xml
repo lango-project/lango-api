@@ -1,0 +1,3 @@
+<api>
+    <endpoint path="/hello" mod="./dist/worker-demo-app.mjs" func="hello" anonymous="true" />
+</api>

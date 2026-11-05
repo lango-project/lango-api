@@ -21,6 +21,7 @@ class Harness
         libraryRequest()
         libraryJwt()
         libraryAnonymous()
+        cancelStartup()
         cliFailure()
         startCli()
         waitReady(deadline)
@@ -45,6 +46,8 @@ Harness()
     @entry = path.resolve(".test-output/worker_entry.mjs")
     @cliState = path.join(@directory, "cli-state")
     @confFile = path.join(@directory, "conf.xml")
+    @apiFile = path.join(@directory, "api.xml")
+    @xmlFixture = path.resolve(".test-output/worker_xml_fixture.mjs")
     fs.writeFileSync(path.join(@directory, "keys.json"), to_json({
         current: @key.toString("base64")
     }))
@@ -58,6 +61,12 @@ Harness()
         <paths appRoot="missing-xml-root" stateDir="missing-xml-state" />
     </conf>
     fs.writeFileSync(@confFile, xml)
+    api = <api>
+        <event name="register" mod="${@xmlFixture}" func="registered" />
+        <event name="start" mod="${@xmlFixture}" func="started" />
+        <endpoint path="/xml" mod="${@xmlFixture}" func="info" anonymous="true" />
+    </api>
+    fs.writeFileSync(@apiFile, api)
 
 Harness:start()
     @configuration = loadConfiguration("worker-host", @confFile, {
@@ -141,6 +150,8 @@ Harness:startCli()
     environment.LANGO_APP_ROOT = "missing-environment-root"
     environment.LANGO_STATE_DIR = "missing-environment-state"
     args = [path.resolve(".test-output/worker-cli.mjs"), "worker-cli", "--config", @confFile, "--workers", "true", "--worker-application", @fixture, "--worker-entry", @entry, "--worker-threads", "1", "--app-root", @directory, "--state-dir", path.join(@directory, "cli-state"), "--host", "127.0.0.1", "--port", "${@port}"]
+    args.add("--api")
+    args.add(@apiFile)
     child = childProcess/spawn(process.execPath, args, {
         env: environment
         stdio: ["ignore", "pipe", "pipe"]
@@ -204,12 +215,22 @@ Harness:checkCli()
         assert result.body.applicationName == "worker-cli"
         assert is_string(result.body.clientId)
         assert is_string(result.token)
+        return fetch("${@url}/xml", {
+            method: "POST"
+            body: "{}"
+        })
+    ).then((res)
+        return decoded(res)
+    ).then((result)
+        assert result.status == 200
+        assert result.body.registered
+        assert result.body.started
         return fetch("${@url}/health")
     ).then((res)
         assert res.status == 200
         return stopCli()
     ).then(()
-        println("PASS the standard CLI starts workers without api.xml, honors final paths and JWT settings, and drains on SIGTERM")
+        println("PASS the standard CLI merges factory and XML routes/hooks, honors final paths and JWT settings, and drains on SIGTERM")
     )
 
 Harness:stopCli()
@@ -265,6 +286,9 @@ main(args)
         return harness.libraryAnonymous()
     ).then(()
         capture harness
+        return harness.cancelStartup()
+    ).then(()
+        capture harness
         harness.cliFailure()
         return harness.startCli()
     ).then(()
@@ -273,4 +297,16 @@ main(args)
     ).finally(()
         capture harness
         return harness.stop()
+    )
+
+Harness:cancelStartup()
+    @host = new Host(@configuration)
+    opening = @host.start()
+    closing = @host.close()
+    return Promise/allSettled([opening, closing]).then((results)
+        assert results[0].status == "rejected"
+        message = "${results[0].reason}"
+        assert message.includes("ApiWorkerHostClosing")
+        assert results[1].status == "fulfilled"
+        println("PASS closing during startup prevents listening and releases the initializing worker pool")
     )

@@ -1,250 +1,22 @@
 # @lango-project/lango-api
 
-`lango-api` is an API host, written in Lango, that exposes Lango applications over HTTP.
+An HTTP API host written in Lango. Every request executes synchronously in a
+bounded Piscina worker pool; HTTP transport remains on the main thread. Routes,
+authorization, lifecycle callbacks, token operations, and UI handlers use ordinary
+return values. Promise/thenable results from application callbacks are rejected.
 
-Application sources, machine-specific configuration, persistent data, and logs are kept separate. The evolving Lango architecture documentation defines the directory contract and operating modes.
+Source, tests, and examples are Lango. Generated JavaScript lives in `dist/`.
+Node.js 24 or newer is required. Build with the current Lango compiler:
 
-## Initial goal
-
-The first milestone provides the following flow:
-
-1. Resolve development or server directories from an application name.
-2. Load and validate `conf.xml` and `api.xml`.
-3. Route an endpoint to an exported function from an npm package.
-4. Run as an independent HTTP server.
-
-Reverse-proxy support, service definitions, authentication, and the advanced HTTP contract follow in later milestones.
-
-Source code and tests are `.lango` files. JavaScript generated from them is published under `dist/` so the npm package can run; `dist/` is never edited manually.
-
-The package is built as an executable Lango artifact: its generated entry invokes the exported `main(args)` function without a handwritten JavaScript bootstrap.
-
-## Library API
-
-The package can also be used as a library. `Host` owns the API lifecycle and
-`Routes` builds routes without XML:
-
-```lango
-import js "@lango-project/lango-api" as api
-
-host = new api/Host({
-    appRoot: appRoot
-    host: "127.0.0.1"
-    port: 3000
-})
-
-routes = new api/Routes()
-routes.endpoint({
-    path: "/health"
-    module: "@shop/health"
-    function: "check"
-})
-
-math = routes.group({
-    path: "/math"
-    module: "@shop/math"
-})
-math.endpoint({
-    path: "/add"
-    function: "add"
-})
-
-host.routes(routes)
-host.start()
+```sh
+npm install
+npm test
+npm run build
 ```
 
-`host.routesFromXml(apiFile)` is the equivalent XML-based route configuration.
-The CLI is a thin bootstrap over this same API.
+Builds clean `dist/` first so removed implementations cannot remain in the package.
 
-Endpoint paths also accept a trailing `/*`, for example `/app/*`. Exact paths
-take precedence; otherwise the longest matching prefix wins. `/app/*` matches
-`/app/` and its descendants, but not `/application` or `/app`. The same syntax
-works in XML and route maps. Duplicate detection compares registered patterns.
-
-Route maps can also hold a module object or a handler function directly. These
-forms bypass npm resolution and are intended for modules that are already
-available to the application:
-
-```lango
-routes.endpoint({
-    path: "/local"
-    function: localHandler
-})
-```
-
-Linked-package rebuilding requires a string package specifier, so the string
-form remains the standard development route form.
-
-### Client and session lifecycle
-
-JWT-enabled hosts can initialize application state before issuing a token:
-
-```lango
-host.on({
-    event: "register"
-    function: registerClient
-})
-host.on({
-    event: "start"
-    module: "@shop/session"
-    function: "startSession"
-})
-
-registerClient(input)
-    context token
-    context log
-    token.theme = "dark"
-    log.info("Client registered: ${input.clientId}")
-```
-
-Each callback receives one metadata map containing `ip`, an ISO UTC
-`timestamp`, `userAgent`, `url`, `queryString`, `clientId`, and `sessionId`.
-The API currently rejects query parameters, so `queryString` is empty. The IP
-comes from the socket; forwarded headers do not change it. `request`, `response`,
-`token`, and `log` are available through context. Promise callbacks retain context
-through an explicit `capture` as in ordinary handlers.
-
-`register` runs when the server creates a new client identity. `start` runs
-after it for every newly created session, including anonymous requests without
-a bearer token. `POST /_lango/start` with a recoverable signed identity runs
-only `start`, even if the old token has expired. Ordinary requests with a valid
-token run neither callback. Invalid tokens at normal endpoints still produce 401.
-
-Callbacks run sequentially and may return Promises. Their return values are
-ignored; token writes become initial claims. Client and session identities remain
-owned by the service. An exception or rejected Promise returns 500 without a new
-token and skips remaining callbacks and the endpoint handler. External callback
-side effects are not rolled back.
-
-`on` accepts the same function, module object, or npm module reference forms as
-route handlers, using an `event` instead of a `path`. A callback module's exports
-are checked before listening, and linked npm packages are built on startup.
-There is one callback per event; duplicates and unknown events are rejected.
-The equivalent configuration map is `lifecycle: { register: registerClient,
-start: { module: "@shop/session", function: "startSession" } }`.
-
-XML applications declare these callbacks directly under `<api>`:
-
-```xml
-<api>
-  <event name="register" mod="@shop/session" func="registerClient" />
-  <event name="start" mod="@shop/session" func="startSession" />
-  <endpoint path="/health" mod="@shop/health" func="check" anonymous="true" />
-</api>
-```
-
-`host.routesFromXml(apiFile)` loads routes and lifecycle events together. The
-CLI loads the same definitions from its selected `api.xml`, including `--api`
-and `LANGO_API` overrides. Events belong at the root and require `name`, `mod`,
-and `func`; unknown attributes, nested content, unknown names, and duplicate
-events are rejected. XML and code registrations may define different events;
-defining the same event in both is an error. Replacing the route source also
-replaces its XML events, while code registrations remain.
-
-### Batched token ping
-
-With a TokenService, `POST /_lango/ping` is reserved for renewing form tokens.
-It accepts a JSON map with a `forms` array of `{ formId, token }` entries and
-returns the same shape containing renewed tokens. There is no single
-`X-Lango-Token` header for a batch; responses use `Cache-Control: no-store`.
-Authentication is performed per entry rather than through one bearer header.
-Form IDs must be unique nonempty strings; batches contain 1–256 forms and
-individual token strings are limited to 16,384 characters.
-
-Every token is verified with the normal signature, issuer, audience, type,
-key and expiry checks before any callback runs. An expired or invalid token
-rejects the entire batch with 401; malformed batches return 400. Ping does not
-bootstrap an expired session, merge identities, advance a sequence number,
-or require `auth: true`. Each form keeps its own claims and auth state.
-An existing signed `formId` must match the submitted form ID.
-
-Register an optional per-form callback through the library or API XML:
-
-```lango
-host.on({
-    event: "ping"
-    module: "@shop/session"
-    function: "pingSession"
-})
-```
-
-The XML form is `<event name="ping" mod="@shop/session" func="pingSession" />`.
-One callback runs per form, sequentially, within the single HTTP request. It
-receives `ip`, an ISO UTC `timestamp`, `clientId`, `sessionId`, `formId`, `url`,
-and `queryString`. `request`, `token`, and `log` contexts are available. The
-callback may update application claims and return a Promise; return values are
-ignored. Existing client/session identities and signed form/sequence fields
-are preserved. Response methods are managed by the batch handler and cannot
-be used to send or customize an individual form response.
-
-All tokens are signed before the response is sent. Callback/signing failure
-returns 500 without a partial token batch; external callback side effects are
-not rolled back. Ping requests, including their errors, do not produce a
-`request` audit event. Register/start callbacks are not called either.
-
-### Completed request audit
-
-Register a `request` event to observe a finished HTTP response:
-
-```lango
-host.on({
-    event: "request"
-    module: "@shop/audit"
-    function: "recordRequest"
-})
-```
-
-The XML equivalent is `<event name="request" mod="@shop/audit"
-func="recordRequest" />`. Module exports are checked before listening, as for
-the other lifecycle events. Auditing also works without JWT configuration.
-
-The event fires once after Node's response `finish` event. Completed 4xx/5xx
-responses and `/_lango/start` are included; `/_lango/ping` is excluded. An aborted response that never
-finishes is logged and produces no audit event. `finish` means the server handed the response
-to its transport; it does not confirm that the client received or applied it.
-
-The callback receives `requestId`, `method`, `ip`, an ISO UTC `timestamp`,
-`durationMs`, `url`, `queryString`, `status`, `clientId`, `sessionId`,
-`transactionId`, `formId`, `seqno`, `input`, and `output`. Unavailable identities
-or client fields are null. Input is copied before handlers run; it is null if
-the request was rejected before parsing or contained invalid JSON. Output is
-the JSON response value supplied to the HTTP writer. `transactionId`, `formId`,
-and `seqno` are client-supplied correlation data, not trusted identity or proof
-that an operation is unique.
-
-The `request` and `token` contexts are detached snapshots. Audit request headers
-contain only content type and user agent; Authorization and Cookie are omitted.
-The `response` context exposes `statusCode`, `body`, and `completed()`; attempts
-to use `status`, `header`, or `send` throw `ApiResponseAlreadySent`. The request's
-`log` context remains available. Changing an audit snapshot cannot alter the
-response or the issued token.
-
-Return values are ignored. Promise callbacks do not delay the response, and
-exceptions or rejections are logged without changing its result. Auditing is
-optional and runs in process; it does not provide a durable delivery queue or
-an automatic shutdown drain. Input/output are delivered to the configured
-callback without being written to logs automatically; the application chooses
-which fields to retain or redact.
-
-## Configuration
-
-Configuration is optional. Without a configuration file, the host listens on `127.0.0.1:3000` and uses the documented development or server directory defaults.
-
-The initial `conf.xml` format is:
-
-```xml
-<conf>
-  <http host="127.0.0.1" port="3000" />
-  <paths
-    appRoot="/optional/application/root"
-    dataDir="/optional/data"
-    stateDir="/optional/state"
-    logDir="/optional/logs"
-    apiFile="/optional/api.xml" />
-</conf>
-```
-
-All attributes are optional. The CLI defaults to development mode:
+## CLI and application sources
 
 ```sh
 lango-api <app> [development|server] \
@@ -253,43 +25,231 @@ lango-api <app> [development|server] \
   [--host <host>] [--port <port>]
 ```
 
-The effective configuration order is command-line options, environment,
-`conf.xml`, then mode-specific defaults. The environment names are
-`LANGO_APP_ROOT`, `LANGO_DATA_DIR`, `LANGO_STATE_DIR`, `LANGO_LOG_DIR`,
-`LANGO_CONFIG`, `LANGO_API`, `LANGO_HOST`, and `LANGO_PORT`. Without an
-explicit API file, the host loads `<appRoot>/deploy/api.xml`.
-
-### JWT configuration
-
-JWT can be enabled from `conf.xml` without constructing a TokenService in code:
+Development is the default mode. Application name and mode determine program,
+configuration, data, state, and log directories; individual paths may be overridden.
+Machine configuration and mutable state belong outside the source worktree.
+Configuration precedence is CLI > environment > XML > defaults. The base
+configuration is optional; an explicitly selected missing file is an error.
 
 ```xml
 <conf>
-  <jwt issuer="shop" audience="shop-browser"
-       keysFile="jwt.keys.json" activeKeyId="current"
-       ttlSeconds="900" sessionTtlSeconds="28800" />
+    <http host="127.0.0.1" port="3000" />
+    <paths appRoot="/srv/shop" stateDir="/var/lib/shop/state"
+           dataDir="/var/lib/shop" logDir="/var/log/shop"
+           apiFile="/etc/shop/api.xml" />
+    <workers threads="2" maxQueue="64" bodyLimit="1048576" />
+    <jwt issuer="shop" audience="shop-browser" keysFile="keys.json"
+         activeKeyId="current" ttlSeconds="900" sessionTtlSeconds="28800" />
+    <state file="runtime.sqlite" namespace="shop" maxForms="10000" />
 </conf>
 ```
 
-The separate key file is a JSON map of key ids to canonical base64-encoded
-random secrets of at least 32 bytes. For example, replace these placeholders
-with real keys:
+Path/HTTP environment names are `LANGO_APP_ROOT`, `LANGO_DATA_DIR`,
+`LANGO_STATE_DIR`, `LANGO_LOG_DIR`, `LANGO_CONFIG`, `LANGO_API`, `LANGO_HOST`,
+and `LANGO_PORT`.
 
-```json
-{
-  "current": "<base64-encoded random key>",
-  "previous": "<previous base64-encoded random key>"
+An explicit `--api`, `LANGO_API`, configuration `apiFile`, or
+`Host.routesFromXml()` selects XML routes. If no factory or parent-side routes
+were selected, existing `<appRoot>/deploy/api.xml` is used automatically.
+Otherwise the default factory is `<appRoot>/dist/worker.mjs`. An explicit factory
+and an explicit XML source can be combined. XML is snapshotted once per startup
+so all workers use the same API definitions.
+
+```xml
+<api>
+    <auth name="allowed" mod="@shop/auth" func="authorize" />
+    <event name="register" mod="@shop/session" func="registered" />
+    <event name="start" mod="@shop/session" func="started" />
+    <event name="ping" mod="@shop/session" func="pinged" />
+    <event name="request" mod="@shop/audit" func="record" />
+    <group path="/shop" mod="@shop/orders" anonymous="true" auth="allowed">
+        <endpoint path="/save" func="save" />
+        <endpoint path="/items/*" func="item" />
+    </group>
+</api>
+```
+
+Exact routes win over wildcards; otherwise the longest matching prefix wins.
+`/app/*` matches `/app/` and descendants, but not `/app` or `/application`.
+Groups inherit module, anonymous, and auth settings. Duplicate routes, auth
+names, and lifecycle registrations fail startup. Lifecycle events belong directly
+under `<api>`. Unknown XML attributes/tags and malformed definitions are errors.
+
+In development, installed linked Lango packages under `appRoot/node_modules` are
+built once in the parent before workers start. Ordinary packages are not built.
+Server mode never runs package builds. Library callers should set `mode: "server"`
+for production. There is no hot reload: source, XML, and key changes need a restart.
+
+## Library and worker factory
+
+```lango
+import js "@lango-project/lango-api" as api
+
+host = new api/Host({
+    applicationName: "shop"
+    appRoot: appRoot
+    stateDir: stateDir
+    mode: "server"
+    host: "127.0.0.1"
+    port: 3000
+})
+host.routesFromXml(apiFile)
+return host.start()
+```
+
+`Host.start()` returns a Promise for the listening Node HTTP server.
+`Host.close()` returns a Promise, drains HTTP requests and accepted audit tasks,
+and closes the pool. Repeated close is safe. Closing the returned HTTP server
+also closes its pool. The CLI handles SIGINT/SIGTERM.
+
+`Routes` provides `endpoint`, `group`, `auth`, and `values`. Parent-side builders
+use transferable module/function names:
+
+```lango
+routes = new api/Routes()
+routes.endpoint({
+    path: "/save"
+    module: "@shop/orders"
+    function: "save"
+})
+host.routes(routes)
+host.on({
+    event: "start"
+    module: "@shop/session"
+    function: "started"
+})
+```
+
+Create direct handlers, module objects, closures, and owned application resources
+inside a worker factory. Parent-process functions and instances cannot cross
+thread boundaries. The factory receives `applicationName`, `appRoot`, `dataDir`,
+`stateDir`, `logDir`, and extra `workers.options`/`optionsFile` values.
+`workers.application` accepts an application-relative filename or an npm package
+export; the module must export `createWorker(options)`.
+
+```lango
+export createWorker(options)
+
+createWorker(options)
+    routes = new api/Routes()
+    routes.endpoint({
+        path: "/save"
+        function: save
+        anonymous: true
+    })
+    return {
+        routes: routes.values()
+        register: registered
+        start: started
+        ping: pinged
+        request: audited
+        close: cleanup
+    }
+```
+
+A factory returns a map containing a routes array. Route functions and module
+objects remain worker-local. Named route/auth/lifecycle modules are imported and
+exports are checked before serving. Lifecycle registrations may also use a
+`lifecycle` map. Factory, parent-builder, and XML definitions merge; duplicate
+routes or events are errors. `close` runs during worker-exit cleanup, with
+`context state` available; forced termination cannot guarantee cleanup.
+
+Optional `preload: [resource]` lists worker-local objects exposing `preload()`.
+The host prepares them in order after module loading and waits for any returned
+Promises. No worker accepts a request until every worker has initialized.
+Preload errors reject startup and close the runtime. Promises are supported at
+this startup boundary; the factory and request callbacks remain synchronous.
+
+### UI integration
+
+`lango-api` has no dependency on `lango-ui`. Create its dispatcher in the factory:
+
+```lango
+dispatcher = new ui/Dispatcher(options.appRoot)
+dispatcher.routesFromXml(uiFile)
+routes.endpoint({
+    path: "/app/*"
+    function: handleEvent
+    anonymous: true
+})
+return {
+    routes: routes.values()
+    preload: [dispatcher]
 }
 ```
 
-The active id selects the signing key; all listed keys may verify tokens.
-Restart after changing the key file or active id. Keys are not generated
-automatically and are never passed as command-line values. Keep the key file
-with machine-specific secrets outside the source worktree.
+Forward the wildcard route to `dispatcher.handle(input)`. UI preload resolves
+`ui.xml` npm exports and stores callable handlers. Dispatch remains synchronous
+after XML/package files disappear. UI replay uses the worker's shared state
+unless a custom synchronous replay adapter was explicitly supplied. Handlers
+use `context form`, including `form.saveButton.enabled = false`.
 
-| CLI option | Environment variable | XML attribute |
+## Request and response
+
+Application endpoints accept POST with a JSON body. Query parameters are rejected.
+Main-thread GET `/health` reports liveness without waiting for a blocked worker.
+
+Handlers receive the parsed input as their only explicit argument. Declare only
+the contexts they need:
+
+```lango
+save(input)
+    context request
+    context response
+    context token
+    context state
+    context log
+    log.info("Saving ${request.path}")
+    return {
+        saved: true
+    }
+```
+
+`request` contains `id`, `method`, `path`, `headers`, and `remoteAddress`.
+The address comes from the socket; forwarded headers are not trusted implicitly.
+`token` contains verified claims, or `{ auth: false }` without JWT.
+`state` is the shared SQLite adapter. Context changes remain scoped to the call;
+pure helpers need no HTTP parameters.
+
+An ordinary return value is serialized as JSON. Alternatively use
+`response.status(code)`, `header(name, value)`, and `send(value)`. Status must be
+an integer from 100 to 599. A response can be sent once. `X-Lango-Token` is reserved.
+`response.completed()` reports whether a response has been sent. These methods
+return synchronous values; `response.logout()` synchronously revokes the current
+session and prevents renewal. It is idempotent before the response is sent.
+
+Authentication is required unless `anonymous: true`. An optional authorization
+callback receives the input map, has the same contexts, and must return Boolean:
+false returns 403, and exceptions, non-Booleans or Promise results return 500.
+Denied/failed authorization never runs the endpoint and discards token changes.
+Auth accepts a direct function, a module/function descriptor, or a registered
+named definition inherited from a group.
+
+Handler exceptions and Promise results return a generic 500 without exposing
+error details. Failed handlers discard unsent token changes. Application side
+effects are not rolled back by an HTTP error or worker termination. Changes made
+after `send()` cannot change the sent body or token snapshot.
+
+## JWT and sessions
+
+JWT is optional. Configure it using the XML section above or `configuration.jwt`.
+An absent/disabled JWT configuration runs anonymously without reading a key file.
+Keys are a JSON map of ids to canonical base64 secrets of at least 32 bytes:
+
+```json
+{
+    "current": "<base64 random secret>",
+    "previous": "<previous base64 random secret>"
+}
+```
+
+The active key signs; retained keys verify. Keep secrets outside the Git worktree.
+XML-relative key filenames resolve from `conf.xml`; CLI/environment-relative names
+resolve from the working directory. Secrets are not passed on the command line.
+
+| CLI | Environment | JWT attribute |
 | --- | --- | --- |
-| `--jwt-enabled true|false` | `LANGO_JWT_ENABLED` | `enabled` |
+| `--jwt-enabled true\|false` | `LANGO_JWT_ENABLED` | `enabled` |
 | `--jwt-issuer` | `LANGO_JWT_ISSUER` | `issuer` |
 | `--jwt-audience` | `LANGO_JWT_AUDIENCE` | `audience` |
 | `--jwt-keys` | `LANGO_JWT_KEYS` | `keysFile` |
@@ -297,516 +257,189 @@ with machine-specific secrets outside the source worktree.
 | `--jwt-ttl` | `LANGO_JWT_TTL` | `ttlSeconds` |
 | `--jwt-session-ttl` | `LANGO_JWT_SESSION_TTL` | `sessionTtlSeconds` |
 
-The precedence remains CLI > environment > XML > defaults. Any JWT section or
-JWT option enables JWT unless `enabled` is explicitly false. Lifetime defaults
-to 900 seconds; absolute session lifetime defaults to 28800 seconds (eight
-hours). Session lifetime must be an integer from 1 to 2592000 seconds (30 days).
-Issuer, audience, key file and active id are required when
-enabled. An absent JWT configuration preserves legacy mode.
+Issuer, audience, active key id, and key file are required when enabled. JWT TTL
+is 1–3600 seconds, default 900. Absolute session lifetime is 1–2592000 seconds,
+default 28800. Renewal never extends the absolute deadline. A shorter configured
+policy applies immediately; a longer one cannot extend an existing session.
 
-XML-relative key files resolve from the `conf.xml` directory; CLI/environment
-relative paths resolve from the process working directory. An explicitly
-selected missing configuration file is an error. Unknown JWT attributes,
-duplicate JWT sections, unreadable/invalid key files, weak key lengths, and
-missing active ids prevent the host from listening. Key contents are excluded
-from error messages. Examples are included under `examples/`.
+Validation pins HS256, `lango+jwt` type, key, issuer/audience, required issuance,
+expiry and id claims, session identity, absolute deadline, and revocation.
+Cryptographic clock tolerance does not extend the absolute session deadline.
+Tokens carry independent form/application claims; protected identity fields are
+restored after callbacks. Signing rechecks expiry and revocation, so a logout in
+another worker prevents late renewal by a running handler.
 
-Library callers may pass the same map as `configuration.jwt`, or supply an
-explicit `configuration.tokenService`; supplying both is rejected.
+`POST /_lango/start` creates an anonymous session. A verified old signature can
+recover only `clientId`, including from an expired or revoked token; auth, session
+identity and form claims start fresh. Invalid signatures create a new identity.
+Anonymous endpoints without bearer tokens also start a session. Ordinary endpoints
+reject supplied invalid/expired tokens with 401 instead of silently bootstrapping.
+`POST /_lango/logout` revokes the bearer session and returns `{ loggedOut: true }`
+without a replacement token. Token-bearing responses use `Cache-Control: no-store`.
 
-## Handler contract
+`TokenService` from `@lango-project/lango-api/tokens` exposes synchronous `sign`,
+`verify`, `verifySigned`, `recoverClient`, `startSession`, `restart`, `revoke`, and
+`checkSession` operations. `SyncTokenService` is an inherited compatibility name
+for this same implementation. Token options accept byte-array keys and a
+synchronous revocation adapter. Async adapters are rejected. `MemorySessionRevocations`
+is available for standalone use; production workers use shared SQLite. Signatures
+interoperate with jose; jose is needed only for interoperability tests.
 
-An endpoint receives its JSON request body as its only explicit argument. HTTP
-state is available only when the handler declares the corresponding context:
+## Lifecycle and audit
 
-```lango
-export createOrder(input)
+Supported lifecycle events are `register`, `start`, `ping`, and `request`.
+Each receives one metadata map and returns synchronously; return values are ignored.
 
-createOrder(input)
-    context request
-    context response
-    context token
-    context log
+`register` runs for new client identities; `start` runs for each new session.
+Metadata includes ISO UTC `timestamp`, `ip`, `userAgent`, `url`, `queryString`,
+`clientId`, `sessionId`, `sessionStartedAt`, and `sessionExpiresAt`. Each hook gets
+its own snapshot; reserved identity is restored between hooks. Failures return
+500 without a JWT and skip the remaining initialization/handler.
 
-    log.info("Creating an order for ${token.userId}")
-    response.status(201).header("Location", "/orders/42")
-    return {
-        id: 42
-        requestId: request.id
-    }
-```
+`POST /_lango/ping` takes `{ forms: [{ formId, token }] }` with 1–256 unique,
+nonempty form ids and token strings at most 16384 characters long. The entire
+batch is verified before callbacks run. Renewal runs sequentially with each
+form's own token context. Existing signed form id/sequence and session identity
+are preserved; form ids must match. Ping metadata includes timestamp, IP,
+client/session/form ids, URL and query string. Its managed response cannot send,
+change status/headers or log out. Success returns renewed tokens per form with
+no single `X-Lango-Token` header. Malformed input returns 400; invalid, expired or
+revoked tokens return 401. Hook failures/Promises return 500 without partial
+renewed tokens. Earlier application side effects are not rolled back.
 
-`request` provides `id`, `method`, `path`, `headers`, and `remoteAddress`.
-`token` contains verified claims when a TokenService is configured, and
-`{ auth: false }` in the legacy host mode. `log` is request-scoped and includes the
-request id. A normal return value is serialized as a JSON response. A handler
-can call `response.send(value)` to write JSON immediately; a later return value
-is ignored. `response.status(code)` and `response.header(name, value)` apply to
-the next send. Promise results are awaited by the host without requiring
-`await` in Lango source.
+A `request` audit task runs after HTTP `finish`. It may run on another worker,
+so callbacks must use shared stores rather than the handler's module memory.
+Completed errors and bootstrap are included; ping, GET `/health`, and responses
+aborted before finish are excluded. Aborts are logged. Finish confirms delivery
+to Node's transport, not receipt/application by the browser.
 
-## Token service foundation
+Audit metadata contains `requestId`, `method`, `ip`, `timestamp`, `durationMs`,
+`url`, `queryString`, `status`, `clientId`, `sessionId`, `transactionId`, `formId`,
+`seqno`, `input`, and `output`. Timing refers to HTTP completion, not audit queue
+execution. Input is copied before callbacks; errors before parsing have null input.
+Client-supplied correlation fields are not trusted identity or deduplication keys.
+Contexts include `state`, `log`, a copied `token`, sanitized `request` headers
+(content type/user agent only), and a completed response exposing `statusCode`,
+`body` and `completed()`. Response mutations throw; snapshot mutations cannot
+change the sent body/JWT. Callback exceptions/Promises are logged and isolated.
+Audit also works without JWT.
 
-The `./tokens` entry exports `TokenService(options)` for signing and verifying
-JWTs using jose. Options are `issuer`, `audience`, `activeKeyId`, `keys` (a map
-of ids to Uint8Array secrets), optional `ttlSeconds` (default 900, maximum
-3600), and optional `sessionTtlSeconds` (default 28800, range 1–2592000).
-Keys must contain at least 32 bytes and should be generated with a
-cryptographically secure random source and managed persistently outside source
-control. Constructor inputs are copied to prevent later key-buffer mutation.
+Audit shares the bounded request queue. Queue rejection/worker failure is logged;
+there is no retry or durable audit queue. Graceful shutdown drains accepted tasks.
+A successful HTTP response does not guarantee audit persistence. Audit tasks
+also have the configured task deadline; a hung audit can trigger worker replacement
+without changing the HTTP response that has already finished.
 
-`sign(claims)` returns a token Promise. `verify(token)` returns a claims Promise
-or rejects with `ApiInvalidToken`. The algorithm is fixed to HS256 and the
-token type to `lango+jwt`; issuer, audience, age, expiry, and key id are checked.
-System claims are written by the service. Retaining an old key id allows
-verification during key rotation. Only trusted services that may also sign
-tokens should receive these shared secrets.
+## Worker and state configuration
 
-Configure a library Host with `tokenService: service` to enable bearer
-verification. Routes are then protected by default and require `token.auth` to
-be true. Mark a route or group `anonymous: true` (XML `anonymous="true"`) for
-public access; child routes can override group inheritance. Missing, invalid,
-expired, or unauthenticated tokens return 401 with a Bearer challenge. Supplying
-an invalid token to a public endpoint is also rejected. Without a TokenService,
-the host retains its previous unauthenticated mode.
+Workers are always enabled. `--workers true`/`enabled="true"` remain accepted;
+disabling workers fails with `ApiWorkersRequired`. No async HTTP fallback remains.
 
-Verified claims are available through `context token`; changes made by a login
-handler are signed into the `X-Lango-Token` response header. Renewals
-also accompany handler error responses when claims were already verified.
-On handler failure, token changes are discarded and the originally verified
-claims are renewed, so a partially failed login cannot grant authentication.
-`clientId`, `sessionId`, `sessionStartedAt`, and `sessionExpiresAt` are fixed for
-the request and cannot be changed by mutating the context. Token-bearing
-responses use `Cache-Control: no-store`.
-Protected identities are also restored after a successful auth callback, before
-the endpoint handler runs. Client and session IDs must be nonempty strings of
-at most 128 characters when signing or verifying tokens.
+| CLI | Environment | Workers attribute | Default |
+| --- | --- | --- | --- |
+| `--worker-application` | `LANGO_WORKER_APPLICATION` | `application` | XML or `dist/worker.mjs` |
+| `--worker-threads` | `LANGO_WORKER_THREADS` | `threads` | 2, maximum 128 |
+| `--worker-max-queue` | `LANGO_WORKER_MAX_QUEUE` | `maxQueue` | 64 |
+| `--worker-body-limit` | `LANGO_WORKER_BODY_LIMIT` | `bodyLimit` | 1048576 bytes |
+| `--worker-entry` | `LANGO_WORKER_ENTRY` | `workerFile` | Package worker-entry export |
+| `--worker-options` | `LANGO_WORKER_OPTIONS` | `optionsFile` | None |
 
-UI Dispatcher endpoints use this verified session identity for their replay
-store, together with the incoming form instance and sequence. Generic API
-endpoints are not automatically deduplicated. Request audit fields remain
-client-supplied correlation data; see the `lango-ui` event replay contract.
+`workers.options` supplies extra library factory settings; it conflicts with
+`optionsFile`. File/options values must be structured-cloneable maps. Filenames
+resolve against the final appRoot. Parent token/state instances cannot be sent
+to workers; configure options/files or construct resources inside the factory.
+Queue overload returns 503 and excess request bodies return 413. GET `/health`
+remains responsive while workers are busy and reports `queueSize` and `threads`.
+There is one in-flight task slot per worker. Host admission is FIFO, with a shared
+bounded queue for requests and audits; Piscina does not choose their queue order.
+Queueing counts toward the task deadline.
 
-With tokens enabled, `POST /_lango/start` is reserved for bootstrap. It accepts
-the previous bearer token, recovers only clientId after verifying its signature,
-issuer, audience, type and known key id, and generates a new sessionId with
-`auth: false`. Expiry is deliberately ignored only in this identity-recovery
-path; old authentication and form claims are never restored. Invalid previous
-tokens begin a fresh client identity. Normal endpoint verification still checks
-expiry. The client persists the returned token and resets its local counters.
+| CLI | Environment | Workers attribute | Default |
+| --- | --- | --- | --- |
+| `--worker-timeout` | `LANGO_WORKER_TIMEOUT` | `requestTimeoutMs` | 30000 ms |
+| `--worker-startup-timeout` | `LANGO_WORKER_STARTUP_TIMEOUT` | `startupTimeoutMs` | 30000 ms |
+| `--worker-shutdown-timeout` | `LANGO_WORKER_SHUTDOWN_TIMEOUT` | `shutdownTimeoutMs` | 30000 ms |
 
-### Session scope across tabs and devices
+Deadline values must be integers from 1 to 2147483647 milliseconds. Configuration
+uses the same XML → environment → CLI precedence as other worker options.
 
-Every bootstrap creates an independent session, including repeated bootstrap
-with the same valid previous token. Only `clientId` is recovered; authentication
-and form state are not inherited. Existing sessions remain valid until their
-own expiry or revocation. A page reload starts another session rather than
-restoring a previous tab's authentication.
+A request/audit deadline covers admission through completion of the pool task,
+including queue time and replacement-worker initialization. It begins after the
+HTTP body is received; Node's HTTP upload/header limits are separate. A queued
+expired task is removed without execution. A running expired task triggers worker
+termination/replacement. The HTTP result is 504 `GatewayTimeout`, with no JWT.
+A worker crash produces a generic 500 without JWT. Neither case retries the task.
+Unstarted queued tasks remain eligible on replacement workers, subject to their
+own deadlines. Replacement workers run the same initialization/preload path.
 
-Logout affects exactly the verified sessionId. It does not log out other tabs
-with the same clientId or other devices belonging to an account. Clients with
-no valid identity seed receive new clientIds, so simultaneous first launches
-can register separate identities. clientId is not a hardware or account ID.
-Applications needing account-wide logout or device limits must define their
-own authorized account/session registry; a client-supplied clientId or account
-name is not sufficient authority for that operation.
+The startup deadline bounds each worker's factory/module/resource initialization;
+a failure prevents listening and destroys the pool. Development package-build
+scripts run before pool creation and are outside that deadline.
 
-### Absolute session lifetime
+`Host.close()` bounds HTTP and queued/active task draining with the shutdown
+deadline. On expiry, it closes remaining connections, rejects queued tasks and
+terminates the pool, then rejects with `ApiWorkerShutdownTimeout`. Clients may see
+a disconnected response. Normal closure drains accepted audit tasks; forced
+closure cannot guarantee their completion. A direct Node `server.close()` uses
+Node's HTTP drain semantics; use `Host.close()` for the total shutdown deadline.
+Worker termination cannot undo earlier side effects. Native libraries must also
+bound their own blocking operations; external native calls may delay termination.
+A process supervisor remains responsible for an OS-level hard shutdown limit.
 
-Every new session receives `sessionStartedAt` and `sessionExpiresAt`, expressed
-as integer Unix seconds. Bootstrap creates these before lifecycle callbacks;
-the host restores them after register/start, auth, handler, and ping callbacks.
-Login and token renewal preserve the original session lifetime. Creating or
-renewing another form does not start a new lifetime.
+State defaults to `stateDir/runtime.sqlite`, namespace `applicationName`, and
+10000 replay streams per namespace. The state directory is created as needed.
+SQLite schema/WAL setup occurs before parallel worker initialization. Connections
+share revocations and UI replay; namespaces isolate applications. Completed
+sequences and interrupted reservations survive restart. Pending reservations
+remain blocked until their session deadline; live entries are not evicted to
+make capacity. Memory state is not supported for a worker host.
 
-Token `exp` is capped at the earlier of its normal TTL and the session deadline.
-Verification and signing also enforce the earlier of the signed deadline and
-`sessionStartedAt + sessionTtlSeconds` under the current configuration. A shorter
-configured policy therefore applies to existing sessions; a longer policy
-does not extend their original signed deadline. The absolute deadline has no
-additional clock-tolerance grace. Signature verification retains its existing
-five-second tolerance for JWT timing checks.
-
-Expired sessions return 401 on ordinary endpoints, including anonymous routes,
-and ping, with no replacement token. If the deadline passes during a handler,
-response signing also returns 401 without renewal; already executed side effects
-are not rolled back. `/_lango/start` may still recover only clientId and create
-a new anonymous session with fresh bounds. It never restores authentication.
-The browser does not automatically bootstrap after a 401; reload to start over
-and authenticate again when needed.
-
-Tokens issued before these session claims were introduced are rejected by
-normal verification. They remain usable only for bootstrap identity recovery.
-Trusted library calls to `sign(claims)` initialize bounds when both are absent;
-renewals must pass the verified bounds. Missing or malformed bounds in a signed
-token cannot silently start another lifetime.
-
-### Logout and session revocation
-
-With tokens enabled, `POST /_lango/logout` requires a valid bearer token, including
-an anonymous session token. It revokes the entire session: all form tokens with
-that `sessionId` are rejected by normal endpoints and ping. Success returns
-`{ "loggedOut": true }`, `Cache-Control: no-store`, and no `X-Lango-Token`.
-Missing, expired, invalid, or already revoked tokens return 401. The path is
-reserved when a TokenService is configured. Other sessions, including sessions
-with the same `clientId`, are unaffected.
-
-Application handlers can also log out through the response context:
-
-```lango
-logout(input)
-    context response
-    response.logout()
-    return {
-        loggedOut: true
-    }
-```
-
-`response.logout()` returns a Promise and is idempotent within the request. The
-host waits for revocation before sending the response, even when the handler
-does not return that Promise. It uses the originally verified session identity;
-changing `token.sessionId` cannot revoke another session. No replacement token
-is issued. A subsequent handler failure does not undo revocation. A store failure
-returns 500 without a token or a successful logout acknowledgment. Ping and
-completed request-audit callbacks cannot call `response.logout()`.
-
-The service also exposes `revoke(claims)` for trusted server code. Pass verified
-claims, never an unverified request body. `verify` checks the revocation store,
-and `sign` checks it before and after asynchronous signing. Requests already
-executing can still have side effects; revocation does not roll them back.
-Setting `token.auth = false` alone continues to issue an anonymous token and
-does not revoke older tokens. Replay protection remains separate work.
-
-By default, each TokenService owns a `MemorySessionRevocations` store, also
-exported by `./tokens`. Its records expire after the configured token lifetime
-plus the five-second clock tolerance. This store is process-local and its state
-is lost on restart: old, otherwise valid tokens can become usable again.
-Persistent or multi-process deployments must supply `options.revocations` with
-a shared, durable store:
-
-| Method | Contract |
-| --- | --- |
-| `isRevoked(sessionId)` | Returns a boolean or a Promise of a boolean. |
-| `revoke(sessionId, expiresAt)` | Records revocation before resolving; `expiresAt` is Unix time in seconds. Repeated writes must retain the later expiry. |
-
-All instances serving the same tokens must consult the same store, use the same
-token and session lifetime policies, and observe completed revocations across instances.
-Store errors reject authentication or signing; they never bypass revocation.
-The CLI can configure SQLite persistence as described below; custom stores can
-also be supplied through the library API.
-
-A revoked token can still be used at `/_lango/start` to recover only `clientId`;
-it never restores the revoked session or its authentication. Browser clients
-should stop old form sessions and bootstrap a new anonymous session after
-logout. `lango-client` implements this flow through `application.logout()`,
-including form disposal, late-response protection, and fresh sequence counters.
-
-### Persistent runtime state
-
-Add a state section to `conf.xml` to persist both session revocations and UI
-sequence reservations:
-
-```xml
-<conf>
-  <state backend="sqlite" file="runtime.sqlite" namespace="shop" maxForms="10000" />
-</conf>
-```
-
-Without state configuration, the existing memory defaults remain. A state
-section defaults to SQLite, `runtime.sqlite`, and 10000 form streams. Its default
-namespace is the application name, or `default` for unnamed library hosts.
-Relative files resolve under the final `stateDir`, including CLI overrides;
-absolute files use the specified path. Missing stateDir for a relative file,
-unknown settings/backends, invalid capacities, and database open/schema errors
-prevent startup. SQLite failure never silently switches to memory. State
-configuration does not enable JWT; configure JWT separately.
-
-| CLI option | Environment variable | XML attribute |
+| CLI | Environment | State attribute |
 | --- | --- | --- |
-| `--state-backend memory|sqlite` | `LANGO_STATE_BACKEND` | `backend` |
 | `--state-file` | `LANGO_STATE_FILE` | `file` |
 | `--state-namespace` | `LANGO_STATE_NAMESPACE` | `namespace` |
 | `--state-max-forms` | `LANGO_STATE_MAX_FORMS` | `maxForms` |
 
-Precedence is CLI > environment > XML > defaults. `maxForms` is a positive safe
-integer and applies per namespace. All processes sharing a namespace should
-use the same capacity and token policies. Keep the file and namespace stable
-across restarts; changing or deleting them discards their protection.
+`--state-backend sqlite`, `LANGO_STATE_BACKEND=sqlite`, and `backend="sqlite"` select
+the supported backend. `SqliteStateStore` from `./state` exposes synchronous
+`claim`, `complete`, `revoke`, `isRevoked`, `close`, and `isClosed` operations.
+SQLite uses local durable storage; a shared network filesystem is not a
+multi-machine state service. Business idempotency remains an application concern.
 
-Library Hosts accept the same `configuration.state` map. Their configured
-TokenService uses this store for revocation. Auth and endpoint handlers can
-read it through `context state`; it is null when no shared store was configured.
-UI Dispatcher automatically uses the request's state store unless an explicit
-`replayStore` adapter was supplied. A dispatcher created at module load does not
-need a reference to the Host. Host-owned stores close with the HTTP server and
-on startup/preflight failure.
+The lower-level `./workers` export provides `WorkerHost` and `startWorkers`.
+It accepts absolute `application`/`workerFile`/`stateFile` paths, `appRoot`, optional
+`apiXml`/`routeDefinitions`/`lifecycle` descriptors, byte-array JWT `tokens`, factory
+`options`, namespace/capacity and transport/pool settings. It does not prepare
+linked packages or read key/configuration files. `start()` resolves to the host,
+whose `server` and `pool` expose Node HTTP and Piscina. Prefer standard `Host`
+for configuration and CLI parity.
 
-The `./state` entry exports `SqliteStateStore(file, options)` with optional
-`namespace` and `maxForms`. It implements both `isRevoked`/`revoke` and
-`claim`/`complete`. Callers can provide `configuration.stateStore` for a shared
-custom backend, including a remote database. It must implement all four
-methods; the caller owns its lifecycle. With an explicit TokenService, pass
-the same store as its `revocations` option. File-based state configuration and
-an independently constructed TokenService are rejected as ambiguous.
+## Migration and validation
 
-SQLite owns a separate connection and does not replace the application's SQL
-adapter. It uses WAL, full synchronous commits, a five-second busy timeout,
-bound query parameters, and `BEGIN IMMEDIATE` for replay reservations. Multiple
-processes can share one database on the same local filesystem; this is not a
-multi-machine database service. New directories and files request owner-only
-permissions. The database stores identifiers, sequence/expiry values and
-reservation state, not raw JWTs.
+The former async HTTP server and duplicate dispatch implementations were removed.
+Create direct functions and resources inside `createWorker`; parent builders keep
+module/function descriptors. Application code must return plain values. UI
+Dispatcher is synchronous by default and requires startup preload for module names.
+Token operations and response/logout methods return values instead of Promises.
+The browser client retains its asynchronous networking contract.
 
-Completed sequence records survive restart. A reservation interrupted before
-completion remains pending until its session deadline; it is never reset merely
-because another process opened the database. A repeated sequence stays consumed,
-and higher sequences return `InProgress`. Recovery of uncertain business effects
-and distributed adapters remain separate concerns.
+Run `npm test` for configuration, synchronous token/security/deadline/runtime
+checks, SQLite persistence/process races, and real worker Host/CLI/XML/ping/audit
+HTTP tests. Pure runtime behavior is tested synchronously instead of duplicating
+an async server harness. `npm run test:workers` also builds sibling `lango-ui` and
+checks real worker/UI/SQLite replay, simultaneous requests, queue overload,
+main-thread responsiveness, cross-worker logout, UI preload and missing exports.
+It requires the multi-repository workspace.
 
-## Authorization callbacks
+The HTTP/UI and XML/package test scenarios use a separate server process and
+small HTTP client processes. Their test drivers execute ordinary synchronous
+steps while the server and concurrent requests keep independent event loops.
+Readiness/results are published atomically through temporary files. Parallel
+worker tests use explicit release signals instead of relying on fixed delays.
+The support code keeps startup/network Promise handling at those process edges.
 
-Routes and groups accept `auth` as a function reference, a named auth rule, or
-`{ module, function }`. Module values may be npm specifiers or already loaded
-module objects:
-
-```lango
-routes.auth({
-    name: "access"
-    function: checkAccess
-})
-private = routes.group({
-    path: "/private"
-    auth: "access"
-})
-private.endpoint({
-    path: "/save"
-    module: "@shop/orders"
-    function: "save"
-})
-
-checkAccess(path, input)
-    context token
-    return token.role == "admin"
-```
-
-XML supports top-level definitions before or after their uses:
-
-```xml
-<api>
-  <auth name="access" mod="@shop/security" func="checkAccess" />
-  <group path="/private" auth="access">
-    <endpoint path="/save" mod="@shop/orders" func="save" />
-  </group>
-</api>
-```
-
-The nearest group's auth rule is inherited; an explicit child rule overrides
-it. The rule runs after the default JWT/auth check and receives the actual path
-and input, with request/response/token/log contexts available. Promise results
-are supported. Only Boolean true permits the endpoint handler. False produces
-403; exceptions, rejections or non-Boolean results produce 500. Denial and
-errors discard token mutations before renewal. Anonymous routes still run
-custom auth, as do legacy hosts without a TokenService.
-
-The Host validates auth modules/exports before listening and rebuilds linked
-packages used only by auth rules too. Direct module calls preserve their receiver.
-
-## Application packages
-
-An endpoint `mod` is an npm package specifier, resolved from the application's
-own `package.json` and `node_modules` directory. For example:
-
-```xml
-<endpoint path="/math/add" mod="@shop/math" func="add" />
-```
-
-Published packages run through their normal `main` or `exports` entry. During
-development, a package installed with `npm link` is rebuilt when `lango-api`
-starts if its `package.json` declares the Lango source and generated entry:
-
-```json
-{
-  "scripts": {
-    "build": "lango build src/index.lango --out dist/index.mjs"
-  },
-  "lango": {
-    "source": "src/index.lango",
-    "output": "dist/index.mjs"
-  }
-}
-```
-
-There is no hot reload. Restart `lango-api` after editing a linked package; the
-restart rebuilds it before the API host begins listening.
-
-## License
-
-Apache-2.0
-
-## Synchronous worker prototype
-
-Worker execution is an opt-in mode of the standard `Host` and CLI. The ordinary
-HTTP path remains the default. A lower-level Piscina host is also available
-through `@lango-project/lango-api/workers`.
-
-The HTTP listener stays on the main thread. A bounded pool runs at most one
-request per worker at a time. Each worker loads the application's compiled
-module, calls its exported `createWorker(options)` factory once, and retains the
-returned routes. The factory returns a map with `routes: routes.values()` and
-optional synchronous `register`, `start`, and `close` functions. Construct routes,
-module objects, and closures inside this factory; functions and live server
-objects are not transferred between threads.
-
-A worker establishes `context request`, `response`, `token`, `state`, and `log`.
-Handlers, authorization callbacks, and register/start hooks execute synchronously.
-Returned Promises and thenables are rejected rather than synchronously waited on.
-The transport and initial module loading still use Promises at their boundaries.
-Worker logging currently uses the standard default logger.
-
-### Standard Host and CLI configuration
-
-The library enables workers with a `workers` map:
-
-```lango
-host = new api/Host({
-    applicationName: "shop"
-    appRoot: appRoot
-    stateDir: stateDir
-    host: "127.0.0.1"
-    port: 3000
-    workers: {
-        application: "dist/worker.mjs"
-        optionsFile: "worker-options.json"
-        threads: 2
-    }
-    jwt: {
-        issuer: "shop"
-        audience: "browser"
-        activeKeyId: "current"
-        keysFile: keysFile
-    }
-})
-return host.start()
-```
-
-`Host.start()` keeps its Promise-for-HTTP-server contract in both modes.
-`Host.close()` drains requests and closes the worker pool, and is safe to call
-repeatedly. Closing the returned HTTP server directly also closes its pool.
-Configure routes, authorization, and lifecycle callbacks inside `createWorker`;
-parent-side `Host.routes`, `routesFromXml`, and `on` registrations cannot be
-transferred to workers and are rejected at startup.
-
-The standard CLI reads a new configuration section:
-
-```xml
-<conf>
-    <workers application="dist/worker.mjs" threads="2" maxQueue="64"
-             bodyLimit="1048576" optionsFile="worker-options.json" />
-</conf>
-```
-
-A workers section or worker option enables the mode unless explicitly disabled.
-Without worker settings it stays off. Defaults are `dist/worker.mjs`, 2 workers,
-64 waiting tasks, and a 1048576-byte body limit. Missing standard directories use
-the existing development/server directory selection in the CLI. Application,
-worker-entry override, and options-file paths resolve against the final
-`appRoot`, after all overrides. An options file must contain a JSON map. The
-library may instead pass `workers.options` directly; combining both is rejected.
-The factory receives `applicationName`, `appRoot`, `dataDir`, `stateDir`, and
-`logDir` as defaults, with explicit application options overriding those values.
-
-Configuration precedence remains XML, then environment, then command line:
-
-| CLI | Environment | `workers` attribute |
-| --- | --- | --- |
-| `--workers true\|false` | `LANGO_WORKERS` | `enabled` |
-| `--worker-application` | `LANGO_WORKER_APPLICATION` | `application` |
-| `--worker-threads` | `LANGO_WORKER_THREADS` | `threads` |
-| `--worker-max-queue` | `LANGO_WORKER_MAX_QUEUE` | `maxQueue` |
-| `--worker-body-limit` | `LANGO_WORKER_BODY_LIMIT` | `bodyLimit` |
-| `--worker-entry` | `LANGO_WORKER_ENTRY` | `workerFile` |
-| `--worker-options` | `LANGO_WORKER_OPTIONS` | `optionsFile` |
-
-Existing JWT settings load the shared key material once in the parent. XML key
-filenames remain relative to `conf.xml`; environment/CLI key filenames follow
-the existing working-directory rule. Missing or disabled JWT configuration
-runs requests with an anonymous token context and does not read a key file.
-Bootstrap/logout endpoints and authenticated UI replay require JWT to be enabled.
-The SQLite file defaults to `stateDir/runtime.sqlite` with the application name
-as namespace. Existing `<state>`/environment/CLI overrides still apply; an
-explicit memory backend or a live parent-side state/token instance is rejected.
-
-Worker mode starts from the factory without loading `api.xml`. Supplying
-`--api`, `LANGO_API`, or an explicit API file in worker mode is rejected until
-worker-side XML route loading is implemented. The CLI closes the host on SIGINT
-and SIGTERM.
-
-### Lower-level worker host
-
-`startWorkers(configuration)` returns a Promise for a `WorkerHost`. Alternatively,
-construct `WorkerHost` and call `start()`. Its `server` and `pool` properties expose
-the underlying HTTP server and Piscina instance. `close()` stops new requests,
-waits for accepted HTTP requests, and closes the pool. Application `close` hooks
-are worker-exit cleanup; forced termination must not be relied on to complete
-application cleanup or transactions.
-
-Direct `WorkerHost` configuration (these are transport settings rather than the
-standard `Host` configuration shown above):
-
-- `application`: absolute path to the compiled application module exporting
-  `createWorker(options)`.
-- `appRoot`: application package directory, used to locate the package's
-  `worker-entry` export. `workerFile` may explicitly override that entry with an
-  absolute compiled filename.
-- `stateFile`: absolute SQLite filename shared by every worker; `namespace` and
-  `maxForms` use the existing state-store defaults.
-- `tokens`: `issuer`, `audience`, `activeKeyId`, `keys` containing byte arrays,
-  and optional `ttlSeconds`/`sessionTtlSeconds`. Keys are supplied once by the
-  parent; keep them stable across restarts. Revocation uses the shared SQLite
-  store automatically. Omit `tokens` or pass null for anonymous operation.
-- `options`: structured-cloneable application factory settings.
-- `host`, `port`: HTTP bind address and port.
-- `threads`: fixed pool size, default 2, maximum 128.
-- `maxQueue`: maximum waiting tasks, default 64; overload returns 503.
-- `bodyLimit`: maximum request-body bytes, default 1048576; excess returns 413.
-
-Only plain request metadata and body text enter the worker. Status, headers and
-serialized JSON leave it. The HTTP API supports POST routes, bootstrap at
-`/_lango/start`, logout at `/_lango/logout`, and main-thread GET `/health` liveness.
-Worker routes must use direct handlers or preloaded module objects. JWT renewal
-preserves protected identity fields and rechecks session revocation after handler
-execution. A logout in another worker therefore prevents a late response from
-renewing that session. UI replay claims and logout records share SQLite rather
-than independent worker memory.
-
-`SyncTokenService`, exported from `@lango-project/lango-api/tokens`, provides the
-existing token operations as synchronous values through `jsonwebtoken`'s
-synchronous API. HS256, token type/key selection, issuer/audience, required claims,
-absolute session limits, and revocation remain checked. Its JWTs interoperate
-with the existing `jose` service. Expired signed tokens can recover only client
-identity during bootstrap; authentication and session identity start fresh.
-
-For UI handlers, create the dispatcher inside the worker factory:
-
-```lango
-dispatcher = new ui/Dispatcher(appRoot, {
-    synchronous: true
-})
-```
-
-Pass direct functions or preloaded modules to its event registrations. This mode
-uses synchronous replay adapters and returns the ordinary UI result directly.
-Handlers can use `context form` and write `form.saveButton.enabled = false`
-without a Promise chain.
-
-Run the standalone API example from this repository with the current compiler:
-
-```sh
-npm run build:worker-demo
-npm run demo:workers
-```
-
-Then, from another terminal:
+The demo commands are `npm run build:worker-demo` and `npm run demo:workers`.
+From another terminal:
 
 ```sh
 curl http://127.0.0.1:8081/health
@@ -814,31 +447,41 @@ curl -X POST http://127.0.0.1:8081/hello \
   -H 'Content-Type: application/json' -d '{"name":"Lango"}'
 ```
 
-The demo uses standard `Host` configuration and keeps its reusable JSON key file
-and SQLite state in `data/worker-demo`. It preserves a key from an earlier binary
-`jwt.key` demo file when creating `keys.json`. The application handler is in
-`examples/worker-app.lango`; the launcher is in `examples/worker-server.lango`.
-Both are Lango source.
+The demo retains keys/state under ignored `data/worker-demo`. After first launch,
+its XML-only equivalent is `node dist/cli.mjs worker-demo --app-root . --config
+examples/worker-conf.xml` after building the demo artifacts.
 
-After starting the demo once to create its key file, stop it and launch the same
-application through the normal CLI from this repository:
+The Piscina migration is complete for the API/UI request contract. Additional
+I/O backends, workload-specific tuning and application idempotency are separate
+features. Streaming, sockets, background asynchronous jobs and automatic retry
+are outside this contract. Neither worker termination nor HTTP failure rolls
+back committed application side effects.
 
-```sh
-node dist/cli.mjs worker-demo --app-root . --config examples/worker-conf.xml
-```
+## I/O contract and load baseline
 
-`npm test` includes synchronous JWT compatibility, settings precedence, Host
-restart/close, anonymous mode, and real CLI startup/SIGTERM tests. The worker
-Host/CLI tests do not require the UI repository.
-`npm run test:workers` additionally builds the sibling `../lango-ui` project and
-runs a real two-worker HTTP/UI/SQLite integration test. It checks replay,
-Promise rejection, request limits, simultaneous workers, queue overload,
-main-thread health responsiveness, and cross-worker logout during a running
-request. This integration test requires the local multi-repository workspace.
+The existing framework I/O paths were audited for this migration:
 
-Remaining integration includes linked-package preparation, string-module
-preloading, worker-side XML route/lifecycle loading, batch ping, request audit,
-and other asynchronous adapters. Streaming, sockets, arbitrary parent-process
-instances, background asynchronous jobs, and automatic retry after a worker
-crash are outside this prototype. A failed request can already have committed
-application changes; neither worker termination nor an HTTP error rolls them back.
+| Path | Request-time contract |
+| --- | --- |
+| JWT and revocation | Synchronous jsonwebtoken and synchronous store calls; Promise adapters are rejected. |
+| Shared SQLite state | DatabaseSync, bounded busy wait, atomic claim/complete and durable interrupted reservations. |
+| Native Lango SQLite adapter | Synchronous operations; application database configuration remains explicit and separate from API state storage. |
+| UI replay adapters | Synchronous claim/complete; invalid/Promise results fail without running the handler. |
+| Files and XML | Synchronous Node file access and XML parsing; route/module preparation happens at startup. |
+| Log | Synchronous application method calls to the standard output/error sinks. |
+| Startup/imports and HTTP transport | Promise handling at the host boundary; complete preload before serving. |
+
+Worker threads do not convert arbitrary asynchronous JavaScript APIs into blocking
+calls. Do not start background Promise, timer, socket or callback jobs from request
+handlers. Outbound `fetch`, asynchronous database drivers and remote state backends
+need an explicit supported adapter/architecture; adding these backends is outside
+this migration. Application-owned connections belong in the worker factory and
+its cleanup hook. Application transactions and business idempotency remain explicit.
+
+Run `npm run bench:workers` for the reproducible local JWT + SQLite baseline:
+1/2/4 workers, eight persistent load clients, a simultaneous health observer, and
+0/5 ms CPU work per request. Each client warms up before a common start barrier.
+The report includes request/health latency, throughput, errors, committed rows
+and process RSS. See [the measured baseline](benchmarks/worker-baseline.md) and
+[its JSON data](benchmarks/worker-baseline.json). It is a short local baseline,
+not a production capacity or long-running memory-leak guarantee.

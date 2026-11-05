@@ -23,7 +23,7 @@ main(args)
         revocations: new MemorySessionRevocations()
     }
     sync = new SyncTokenService(options)
-    asyncService = new TokenService(options)
+    service = new TokenService(options)
     token = sync.sign({
         clientId: "client"
         sessionId: "session"
@@ -39,40 +39,27 @@ main(args)
     catch error
         failed = true
     assert failed
-    return asyncService.verify(token).then((verified)
-        capture asyncService
-        assert verified.sessionId == "session"
-        return asyncService.sign({
-            clientId: "client"
-            sessionId: "other"
-            auth: true
-        })
-    ).then((other)
-        capture sync
-        capture options
-        assert sync.verify(other).sessionId == "other"
-        sync.revoke({
-            sessionId: "session"
-        })
-        failed = false
-        try
-            sync.verify(sync.sign({
-                clientId: "client"
-                sessionId: "session"
-            }))
-        catch error
-            failed = true
-        assert failed
-        assert sync.verify(other).auth == true
-        restarted = sync.startSession(other)
-        assert restarted.claims.clientId == "client"
-        assert restarted.claims.auth == false
-        assert restarted.claims.sessionId != "other"
-        assert !restarted.registered
-        checkSecurity(options)
-        checkInvalid(options)
-        println("PASS synchronous JWTs interoperate with jose, preserve identity, revoke sessions and reject invalid claims")
-    )
+    verified = service.verify(token)
+    assert verified.sessionId == "session"
+    other = service.sign({
+        clientId: "client"
+        sessionId: "other"
+        auth: true
+    })
+    assert sync.verify(other).sessionId == "other"
+    sync.revoke({
+        sessionId: "session"
+    })
+    rejected(sync, token)
+    assert sync.verify(other).auth
+    restarted = sync.startSession(other)
+    assert restarted.claims.clientId == "client"
+    assert !restarted.claims.auth
+    assert restarted.claims.sessionId != "other"
+    assert !restarted.registered
+    checkSecurity(options)
+    checkInvalid(options)
+    println("PASS TokenService and its compatibility alias share one synchronous implementation")
 
 checkInvalid(options)
     service = new SyncTokenService(options)

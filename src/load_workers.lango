@@ -1,0 +1,206 @@
+import js global Date
+import js global Math
+import js global process
+import js "node:fs" as fs
+import js "node:path" as path
+import js "node:os" as os
+import js "node:crypto" as crypto
+import js "node:sqlite" as sqlite
+import js "node:child_process" as children
+import "./http_test_support"
+    class HttpTestServer
+    waitForTestFile(file, deadline)
+    writeTestResult(file, value)
+
+export main(args)
+
+class Benchmark
+    methods
+        measure(threads, workMs)
+        clients(token, start, stop)
+        stop()
+
+Benchmark(count)
+    @directory = fs.mkdtempSync(path.join(os.tmpdir(), "lango-load-"))
+    @host = new HttpTestServer(@directory)
+    @count = count
+    @clients = []
+
+Benchmark:measure(threads, workMs)
+    database = path.join(@directory, "application-${threads}-${workMs}.sqlite")
+    db = new sqlite/DatabaseSync(database)
+    db.exec("PRAGMA journal_mode = WAL")
+    db.exec("CREATE TABLE visits (id TEXT PRIMARY KEY)")
+    db.close()
+    key = crypto/randomBytes(32)
+    @host.start({
+        appRoot: path.resolve(".")
+        application: path.resolve(".test-output/load_fixture.mjs")
+        workerFile: path.resolve(".test-output/worker_entry.mjs")
+        stateFile: path.join(@directory, "state.sqlite")
+        host: "127.0.0.1"
+        port: 0
+        threads: threads
+        maxQueue: 64
+        tokens: {
+            issuer: "load"
+            audience: "browser"
+            activeKeyId: "current"
+            keys: {
+                current: key.toString("base64")
+            }
+        }
+        options: {
+            database: database
+            workMs: workMs
+        }
+    })
+    issued = @host.request("/_lango/start", {
+    })
+    before = @host.request("/memory", {
+    }, issued.token)
+    start = path.join(@directory, "start-${threads}-${workMs}")
+    stop = path.join(@directory, "stop-${threads}-${workMs}")
+    outputs = clients(issued.token, start, stop)
+    for outputs as file
+        waitForTestFile("${file}.ready", Date/now() + 30000)
+    fs.writeFileSync(start, "start")
+    reports = []
+    for outputs as index: file
+        if index < 8
+            waitForTestFile(file, Date/now() + 60000)
+            reports.add(from_json(fs.readFileSync(file, "utf8")))
+    fs.writeFileSync(stop, "stop")
+    observer = outputs[8]
+    waitForTestFile(observer, Date/now() + 10000)
+    health = from_json(fs.readFileSync(observer, "utf8"))
+    after = @host.request("/memory", {
+    }, issued.token)
+    @host.stop()
+    db = new sqlite/DatabaseSync(database)
+    query = db.prepare("SELECT COUNT(*) AS total FROM visits")
+    committed = query.get()
+    db.close()
+    result = aggregate(reports)
+    result.committedRows = committed.total
+    assert result.committedRows == 8 * (@count + 2)
+    result.threads = threads
+    result.workMs = workMs
+    result.health = percentiles(health.latencies)
+    result.healthErrors = health.errors
+    result.rssBeforeMiB = round(before.body.rss / 1048576)
+    result.rssAfterMiB = round(after.body.rss / 1048576)
+    assert result.errors == 0
+    assert result.healthErrors == 0
+    assert result.requests == 8 * @count
+    println(to_json(result))
+    return result
+
+Benchmark:clients(token, start, stop)
+    outputs = []
+    url = @host.url
+    for range(9) as index
+        output = path.join(@directory, "result-${@clients.length}.json")
+        file = "${output}.input"
+        target = "${url}/work"
+        if index == 8
+            target = "${url}/health"
+        writeTestResult(file, {
+            url: target
+            health: index == 8
+            token: token
+            start: start
+            stop: stop
+            output: output
+            count: @count
+        })
+        child = children/spawn(process.execPath, [path.resolve(".test-output/load_client.mjs"), file], {
+            stdio: "ignore"
+        })
+        @clients.add({
+            process: child
+            output: output
+        })
+        outputs.add(output)
+    return outputs
+
+Benchmark:stop()
+    try
+        @host.stop()
+    finally
+        for @clients as client
+            if !fs.existsSync(client.output)
+                child = client.process
+                child.kill("SIGTERM")
+        fs.rmSync(@directory, {
+            recursive: true
+            force: true
+        })
+
+round(value)
+    return Math/round(value * 100) / 100
+
+percentiles(values)
+    values.sort((a, b)
+        return a - b
+    )
+    size = values.length
+    if size == 0
+        throw "NoLoadSamples"
+    return {
+        p50Ms: round(values[Math/floor((size - 1) * 0.5)])
+        p95Ms: round(values[Math/floor((size - 1) * 0.95)])
+        p99Ms: round(values[Math/floor((size - 1) * 0.99)])
+        maxMs: round(values[size - 1])
+    }
+
+aggregate(reports)
+    values = []
+    errors = 0
+    first = reports[0].started
+    last = reports[0].finished
+    for reports as report
+        if report.failure != null
+            throw report.failure
+        errors = errors + report.errors
+        first = Math/min(first, report.started)
+        last = Math/max(last, report.finished)
+        for report.latencies as value
+            values.add(value)
+    result = percentiles(values)
+    result.requests = values.length
+    result.errors = errors
+    result.elapsedMs = last - first
+    result.requestsPerSecond = round(values.length * 1000 / (last - first))
+    return result
+
+main(args)
+    count = 100
+    if args[0] != null
+        count = to_js_number($(args[0]))
+    if !is_number(count) or count < 1 or count > 10000 or count % 1 != 0
+        throw "LoadCountMustBePositiveIntegerUpTo10000"
+    benchmark = new Benchmark(count)
+    results = []
+    try
+        for [0, 5] as workMs
+            for [1, 2, 4] as threads
+                results.add(benchmark.measure(threads, workMs))
+    finally
+        benchmark.stop()
+    output = args[1]
+    if output == null
+        output = "benchmarks/worker-baseline.json"
+    fs.mkdirSync(path.dirname(output), {
+        recursive: true
+    })
+    timestamp = new Date()
+    writeTestResult(output, {
+        timestamp: timestamp.toISOString()
+        node: process.version
+        cpu: os.cpus()[0].model
+        availableParallelism: os.availableParallelism()
+        concurrency: 8
+        requestsPerClient: count
+        results: results
+    })

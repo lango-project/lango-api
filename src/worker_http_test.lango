@@ -1,14 +1,13 @@
-import js global Promise
-import js global fetch
-import js global setTimeout
 import js global Date
 import js "node:fs" as fs
 import js "node:path" as path
 import js "node:os" as os
 import js "node:crypto" as crypto
 import js "node:sqlite" as sqlite
-import "./worker_host"
-    startWorkers(configuration)
+import "./http_test_support"
+    class HttpTestServer
+    waitForTestFile(file, deadline)
+    waitForTestResponse(requests, deadline)
 
 export main(args)
 
@@ -22,26 +21,21 @@ class Harness
         parallel()
         queue()
         health()
-        otherWorker()
-        logout()
         stop()
 
 Harness()
     @directory = fs.mkdtempSync(path.join(os.tmpdir(), "lango-workers-"))
-    @host = null
+    @host = new HttpTestServer(@directory)
     @token = null
-    @url = null
-    @busyThread = null
-    @slow = null
-    @slowOne = null
-    @slowTwo = null
     @marker = path.join(@directory, "running")
     @database = path.join(@directory, "application.sqlite")
 
 Harness:start()
-    return startWorkers({
+    key = crypto/randomBytes(32)
+    @host.start({
         appRoot: path.resolve(".")
         application: path.resolve(".test-output/worker_fixture.mjs")
+        workerFile: path.resolve(".test-output/worker_entry.mjs")
         stateFile: path.join(@directory, "runtime.sqlite")
         namespace: "worker-test"
         host: "127.0.0.1"
@@ -54,53 +48,25 @@ Harness:start()
             audience: "worker-test"
             activeKeyId: "current"
             keys: {
-                current: crypto/randomBytes(32)
+                current: key.toString("base64")
             }
         }
         options: {
             database: @database
             marker: @marker
         }
-    }).then((host)
-        @host = host
-        address = host.server.address()
-        @url = "http://127.0.0.1:${address.port}"
-        return null
-    )
+    })
 
 Harness:post(endpoint, input = null, bearer = null)
     if bearer == null
         bearer = @token
-    headers = {
-        "Content-Type": "application/json"
-    }
-    if bearer != null
-        headers.Authorization = "Bearer ${bearer}"
-    return fetch("${@url}${endpoint}", {
-        method: "POST"
-        headers: headers
-        body: to_json(input)
-    }).then((res)
-        return readResponse(res)
-    )
-
-readResponse(res)
-    return res.json().then((body)
-        capture res
-        return {
-            status: res.status
-            body: body
-            token: res.headers.get("x-lango-token")
-            thread: res.headers.get("x-worker-thread")
-        }
-    )
+    return @host.request(endpoint, input, bearer)
 
 Harness:bootstrap()
-    return post("/_lango/start").then((result)
-        assert result.status == 200
-        assert is_string(result.token)
-        @token = result.token
-    )
+    result = post("/_lango/start")
+    assert result.status == 200
+    assert is_string(result.token)
+    @token = result.token
 
 uiInput()
     return {
@@ -114,213 +80,123 @@ uiInput()
     }
 
 Harness:ui()
-    return post("/app/save", uiInput()).then((result)
-        assert result.status == 200
-        assert result.body.vals.email == "Saved: hello@example.com"
-        assert result.body.cmds[0].type == "setProperty"
-        assert result.body.cmds[0].name == "enabled"
-        assert result.body.cmds[0].value == false
-        assert result.thread != null
-        return post("/app/save", uiInput())
-    ).then((duplicate)
-        assert duplicate.status == 409
-        assert duplicate.body.reason == "AlreadyConsumed"
-        db = new sqlite/DatabaseSync(@database)
-        try
-            query = db.prepare("SELECT COUNT(*) AS total FROM visits")
-            row = query.get()
-            assert row.total == 1
-        finally
-            db.close()
-        println("PASS Piscina dispatches a synchronous UI handler with form/context and SQLite replay protection")
-    )
+    result = post("/app/save", uiInput())
+    assert result.status == 200
+    assert result.body.vals.email == "Saved: hello@example.com"
+    assert result.body.cmds[0].type == "setProperty"
+    assert result.body.cmds[0].name == "enabled"
+    assert result.body.cmds[0].value == false
+    assert result.thread != null
+    duplicate = post("/app/save", uiInput())
+    assert duplicate.status == 409
+    assert duplicate.body.reason == "AlreadyConsumed"
+    db = new sqlite/DatabaseSync(@database)
+    try
+        query = db.prepare("SELECT COUNT(*) AS total FROM visits")
+        row = query.get()
+        assert row.total == 1
+    finally
+        db.close()
+    println("PASS Piscina dispatches a synchronous UI handler with form/context and SQLite replay protection")
 
 Harness:errors()
-    return post("/bad").then((result)
-        assert result.status == 500
-        assert result.body.error == "InternalServerError"
-        return post("/throw")
-    ).then((result)
-        assert result.status == 500
-        assert !to_json(result.body).includes("SensitiveWorkerDetail")
-        return post("/private")
-    ).then((result)
-        assert result.status == 401
-        return post("/info", null, "invalid")
-    ).then((result)
-        assert result.status == 401
-        return post("/missing")
-    ).then((result)
-        assert result.status == 404
-        return fetch("${@url}/info", {
-            method: "POST"
-            body: "{"
-        })
-    ).then((res)
-        assert res.status == 400
-        padding = "x"
-        return fetch("${@url}/info", {
-            method: "POST"
-            body: padding.repeat(5000)
-        })
-    ).then((res)
-        assert res.status == 413
-        println("PASS worker boundaries reject Promise handlers, malformed/oversized requests and invalid tokens without exposing errors")
-    )
+    result = post("/bad")
+    assert result.status == 500
+    assert result.body.error == "InternalServerError"
+    result = post("/throw")
+    assert result.status == 500
+    encoded = to_json(result.body)
+    assert !encoded.includes("SensitiveWorkerDetail")
+    assert post("/private").status == 401
+    assert post("/info", null, "invalid").status == 401
+    assert post("/missing").status == 404
+    malformed = @host.raw("/info", "{")
+    assert malformed.read().status == 400
+    padding = "x"
+    oversized = @host.raw("/info", padding.repeat(5000))
+    assert oversized.read().status == 413
+    println("PASS worker boundaries reject Promise handlers, malformed/oversized requests and invalid tokens without exposing errors")
 
 Harness:parallel()
-    @slow = post("/slow", {
+    resetReleaseFiles(@marker)
+    slow = @host.pending("/slow", {
         milliseconds: 1000
-    })
-    return waitForFile(@marker, Date/now() + 10000).then(()
-        capture fs
-        @busyThread = fs.readFileSync(@marker, "utf8")
-        return health()
-    ).then(()
-        return otherWorker()
-    ).then(()
-        return logout()
-    ).then(()
-        return @slow
-    ).then((late)
-        assert late.status == 401
-        return post("/info")
-    ).then((result)
-        assert result.status == 401
-        println("PASS a blocked worker leaves HTTP and a second worker responsive; shared logout prevents late token renewal")
-    )
+        controlled: true
+    }, @token)
+    waitForTestFile(@marker, Date/now() + 10000)
+    busyThread = fs.readFileSync(@marker, "utf8")
+    health()
+    other = post("/info")
+    assert other.status == 200
+    assert "${other.body.threadId}" != busyThread
+    assert other.body.auth == false
+    assert other.body.path == "/info"
+    logout = post("/_lango/logout")
+    assert logout.status == 200
+    assert logout.body.loggedOut
+    assert logout.token == null
+    fs.writeFileSync("${@marker}.release", "release")
+    assert slow.read().status == 401
+    assert post("/info").status == 401
+    println("PASS a blocked worker leaves HTTP and a second worker responsive; shared logout prevents late token renewal")
 
 Harness:queue()
-    @slowOne = post("/slow", {
+    resetReleaseFiles(@marker)
+    first = @host.pending("/slow", {
         milliseconds: 1000
-    })
-    @slowTwo = post("/slow", {
+        controlled: true
+    }, @token)
+    second = @host.pending("/slow", {
         milliseconds: 1000
+        controlled: true
         second: true
-    })
-    waiting = [waitForFile(@marker, Date/now() + 10000), waitForFile("${@marker}.second", Date/now() + 10000)]
-    return Promise/all(waiting).then(()
-        capture fs
-        assert fs.readFileSync(@marker, "utf8") != fs.readFileSync("${@marker}.second", "utf8")
-        return health()
-    ).then(()
-        left = post("/info")
-        right = post("/info")
-        return Promise/all([left, right])
-    ).then((results)
-        a = results[0].status
-        b = results[1].status
-        assert (a == 200 and b == 503) or (a == 503 and b == 200)
-        return Promise/all([@slowOne, @slowTwo])
-    ).then((results)
-        assert results[0].status == 200
-        assert results[1].status == 200
-        println("PASS two workers run concurrently; a bounded queue rejects overload while HTTP health remains responsive")
-    )
+    }, @token)
+    waitForTestFile(@marker, Date/now() + 10000)
+    waitForTestFile("${@marker}.second", Date/now() + 10000)
+    assert fs.readFileSync(@marker, "utf8") != fs.readFileSync("${@marker}.second", "utf8")
+    health()
+    waiting = [@host.pending("/info", null, @token), @host.pending("/info", null, @token)]
+    rejected = waitForTestResponse(waiting, Date/now() + 10000)
+    assert waiting[rejected].read().status == 503
+    fs.writeFileSync("${@marker}.release", "release")
+    fs.writeFileSync("${@marker}.second.release", "release")
+    accepted = 1 - rejected
+    assert waiting[accepted].read().status == 200
+    assert first.read().status == 200
+    assert second.read().status == 200
+    println("PASS two workers run concurrently; a bounded queue rejects overload while HTTP health remains responsive")
 
 Harness:health()
-    return fetch("${@url}/health").then((res)
-        capture fs
-        assert res.status == 200
-        assert fs.existsSync(@marker)
-    )
+    pending = @host.raw("/health", null, null, "GET")
+    assert pending.read().status == 200
+    assert fs.existsSync(@marker)
 
-Harness:otherWorker()
-    return post("/info").then((result)
-        assert result.status == 200
-        assert "${result.body.threadId}" != @busyThread
-        assert result.body.auth == false
-        assert result.body.path == "/info"
-    )
-
-Harness:logout()
-    return post("/_lango/logout").then((result)
-        assert result.status == 200
-        assert result.body.loggedOut == true
-        assert result.token == null
-    )
+resetReleaseFiles(marker)
+    for ["${marker}.release", "${marker}.second.release"] as file
+        fs.rmSync(file, {
+            force: true
+        })
 
 Harness:stop()
-    if @host == null
-        cleanup(@directory)
-        return Promise/resolve()
-    directory = @directory
-    host = @host
-    server = host.server
-    closed = new Promise((resolve, reject)
-        capture server
-        server.once("close", ()
-            capture resolve
-            resolve()
-        )
-        server.close()
-    )
-    return closed.then(()
-        capture host
-        return waitForPool(host.pool, Date/now() + 5000)
-    ).then(()
-        capture host
-        return host.close()
-    ).then(()
+    try
+        fs.writeFileSync("${@marker}.release", "release")
+        fs.writeFileSync("${@marker}.second.release", "release")
+        @host.stop()
         println("PASS closing the returned HTTP server also closes its worker pool")
-    ).finally(()
-        capture directory
-        cleanup(directory)
-    )
-
-cleanup(directory)
-    fs.rmSync(directory, {
-        recursive: true
-        force: true
-    })
-    return null
-
-waitForFile(file, deadline)
-    if fs.existsSync(file)
-        return Promise/resolve()
-    if Date/now() > deadline
-        throw "WorkerDidNotStart"
-    return delay().then(()
-        capture file
-        capture deadline
-        return waitForFile(file, deadline)
-    )
-
-delay()
-    pending = new Promise((resolve, reject)
-        setTimeout(resolve, 10)
-    )
-    return pending
-
-waitForPool(pool, deadline)
-    if pool.threads.length == 0
-        return Promise/resolve()
-    if Date/now() > deadline
-        throw "WorkerPoolDidNotClose"
-    return delay().then(()
-        capture pool
-        capture deadline
-        return waitForPool(pool, deadline)
-    )
+    finally
+        fs.rmSync(@directory, {
+            recursive: true
+            force: true
+        })
 
 main(args)
     harness = new Harness()
-    return harness.start().then(()
-        capture harness
-        return harness.bootstrap()
-    ).then(()
-        capture harness
-        return harness.ui()
-    ).then(()
-        capture harness
-        return harness.errors()
-    ).then(()
-        capture harness
-        return harness.queue()
-    ).then(()
-        capture harness
-        return harness.parallel()
-    ).finally(()
-        capture harness
-        return harness.stop()
-    )
+    try
+        harness.start()
+        harness.bootstrap()
+        harness.ui()
+        harness.errors()
+        harness.queue()
+        harness.parallel()
+    finally
+        harness.stop()

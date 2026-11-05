@@ -1,6 +1,7 @@
 import js "@lango-project/lango-api" as api
 
 export createWorker(options)
+export hello(input)
 
 createWorker(options)
     routes = new api/Routes()

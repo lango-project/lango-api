@@ -1,0 +1,174 @@
+import js global Date
+import js global Atomics
+import js global Int32Array
+import js global SharedArrayBuffer
+import js global process
+import js "node:fs" as fs
+import js "node:path" as path
+import js "node:child_process" as children
+
+export waitForTestFile(file, deadline)
+export waitForTestResponse(requests, deadline)
+export writeTestResult(file, value)
+
+export class HttpTestServer
+    properties
+        url
+        lastExit
+    methods
+        start(configuration)
+        request(endpoint, input = null, token = null)
+        pending(endpoint, input = null, token = null)
+        raw(endpoint, body, token = null, method = "POST")
+        stop(expectedCode = 0)
+
+export class HttpTestRequest
+    methods
+        read()
+        ready()
+        cancel()
+
+HttpTestServer(directory)
+    @directory = directory
+    @child = null
+    @requests = []
+    @stopped = false
+    @failed = false
+    @url = null
+    @lastExit = null
+    @ready = path.join(directory, "http-ready.json")
+    @exited = path.join(directory, "http-exited.json")
+    @stopFile = "${@exited}.stop"
+
+HttpTestServer:start(configuration)
+    if @child != null and !@stopped
+        throw "HttpTestServerAlreadyRunning"
+    @stopped = false
+    @failed = false
+    fs.rmSync(@ready, {
+        force: true
+    })
+    fs.rmSync(@exited, {
+        force: true
+    })
+    fs.rmSync(@stopFile, {
+        force: true
+    })
+    file = path.join(@directory, "http-settings.json")
+    fs.writeFileSync(file, to_json(configuration))
+    @child = children/spawn(process.execPath, [path.resolve(".test-output/http_test_server.mjs"), file, @ready, @exited], {
+        stdio: "ignore"
+    })
+    waitForTestFile(@ready, Date/now() + 15000)
+    ready = from_json(fs.readFileSync(@ready, "utf8"))
+    if ready.failure != null
+        @failed = true
+        throw "HttpTestStartupFailed: ${ready.failure}"
+    @url = ready.url
+    return @this
+
+HttpTestServer:request(endpoint, input = null, token = null)
+    task = pending(endpoint, input, token)
+    return task.read()
+
+HttpTestServer:pending(endpoint, input = null, token = null)
+    return raw(endpoint, to_json(input), token)
+
+HttpTestServer:raw(endpoint, body, token = null, method = "POST")
+    headers = {
+        "Content-Type": "application/json"
+    }
+    if token != null
+        headers.Authorization = "Bearer ${token}"
+    if method == "GET"
+        body = null
+    request = new HttpTestRequest(@directory, @requests.length, "${@url}${endpoint}", {
+        method: method
+        headers: headers
+        body: body
+    })
+    @requests.add(request)
+    return request
+
+HttpTestServer:stop(expectedCode = 0)
+    if @stopped
+        return null
+    @stopped = true
+    try
+        if @child != null
+            if !@failed
+                fs.writeFileSync(@stopFile, "close")
+            waitForTestFile(@exited, Date/now() + 10000)
+            result = from_json(fs.readFileSync(@exited, "utf8"))
+            @lastExit = result
+            if @failed
+                assert result.code == 1
+              else
+                  assert result.code == expectedCode
+            if result.threads != null
+                assert result.threads == 0
+    catch error
+        if @child != null
+            @child.kill("SIGKILL")
+        throw error
+    finally
+        for @requests as request
+            request.cancel()
+    return null
+
+HttpTestRequest(directory, index, url, options)
+    input = path.join(directory, "http-input-${index}.json")
+    @output = path.join(directory, "http-output-${index}.json")
+    @response = null
+    fs.writeFileSync(input, to_json({
+        url: url
+        options: options
+    }))
+    @child = children/spawn(process.execPath, [path.resolve(".test-output/http_test_client.mjs"), input, @output], {
+        stdio: "ignore"
+    })
+
+HttpTestRequest:read()
+    if @response != null
+        return @response
+    try
+        waitForTestFile(@output, Date/now() + 15000)
+        @response = from_json(fs.readFileSync(@output, "utf8"))
+        if @response.failure != null
+            throw "HttpTestRequestFailed: ${@response.failure}"
+        return @response
+    catch error
+        cancel()
+        throw error
+
+HttpTestRequest:cancel()
+    if !fs.existsSync(@output)
+        @child.kill("SIGTERM")
+    return null
+
+waitForTestFile(file, deadline)
+    signal = new Int32Array(new SharedArrayBuffer(4))
+    loop while !fs.existsSync(file)
+        if Date/now() >= deadline
+            throw "HttpTestTimedOut: ${file}"
+        Atomics/wait(signal, 0, 0, 10)
+    return null
+
+HttpTestRequest:ready()
+    return fs.existsSync(@output)
+
+waitForTestResponse(requests, deadline)
+    signal = new Int32Array(new SharedArrayBuffer(4))
+    loop
+        for requests as index: request
+            if request.ready()
+                return index
+        if Date/now() >= deadline
+            throw "HttpTestResponsesTimedOut"
+        Atomics/wait(signal, 0, 0, 10)
+
+writeTestResult(file, value)
+    pending = "${file}.tmp"
+    fs.writeFileSync(pending, to_json(value))
+    fs.renameSync(pending, file)
+    return null

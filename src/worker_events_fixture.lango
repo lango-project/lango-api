@@ -1,0 +1,130 @@
+import js global Promise
+import js global Atomics
+import js global Int32Array
+import js global SharedArrayBuffer
+import js "node:fs" as fs
+import "./library"
+    class Routes
+
+export createWorker(options)
+export pinged(input)
+export audited(input)
+
+global auditFile = null
+
+createWorker(options)
+    global auditFile
+    auditFile = options.auditFile
+    routes = new Routes()
+    routes.endpoint({
+        path: "/echo"
+        function: echo
+        anonymous: true
+    })
+    routes.endpoint({
+        path: "/fail"
+        function: fail
+        anonymous: true
+    })
+    routes.endpoint({
+        path: "/slow"
+        function: slow
+        anonymous: true
+    })
+    return {
+        routes: routes.values()
+    }
+
+echo(input)
+    context token
+    context response
+    if is_string(input.formId)
+        token.formId = input.formId
+        token.seqno = input.seqno
+        token.mode = input.mode
+    original = from_json(to_json(input))
+    response.send(original)
+    input.changedAfterSend = true
+    token.changedAfterSend = true
+    return null
+
+fail(input)
+    context token
+    token.auth = true
+    throw "PrivateHandlerFailure"
+
+pinged(input)
+    global auditFile
+    context request
+    context response
+    context token
+    context state
+    assert !state.isClosed()
+    assert request.path == "/_lango/ping"
+    assert !response.completed()
+    assert input.formId == token.formId
+    assert is_string(input.timestamp)
+    assert input.queryString == ""
+    fs.appendFileSync("${auditFile}.ping", "called\n")
+    switch token.mode
+      case "throw"
+          throw "PrivatePingFailure"
+      case "promise"
+          return Promise/resolve(null)
+      case "send"
+          return response.send("must-not-send")
+      case "logout"
+          return response.logout()
+    token.pingCount = 1
+    token.clientId = "must-be-restored"
+    token.sessionId = "must-be-restored"
+    token.sessionStartedAt = 1
+    token.sessionExpiresAt = 2
+    token.formId = "must-be-restored"
+    token.seqno = 999
+    return null
+
+audited(input)
+    global auditFile
+    context request
+    context response
+    context token
+    context state
+    assert !state.isClosed()
+    assert response.completed()
+    assert response.statusCode == input.status
+    assert request.id == input.requestId
+    assert request.headers.authorization == null
+    assert request.headers.cookie == null
+    record = {
+        metadata: from_json(to_json(input))
+        token: from_json(to_json(token))
+        body: from_json(to_json(response.body))
+    }
+    fs.appendFileSync(auditFile, "${to_json(record)}\n")
+    token.auditOnly = true
+    if is_object(input.output)
+        input.output.auditOnly = true
+    mode = null
+    if is_object(input.input)
+        mode = input.input.auditMode
+    switch mode
+      case "throw"
+          throw "PrivateAuditFailure"
+      case "promise"
+          return Promise/resolve(null)
+      case "send"
+          return response.send("must-not-replace-response")
+    return null
+
+slow(input)
+    global auditFile
+    fs.writeFileSync("${auditFile}.slow", "started")
+    signal = new Int32Array(new SharedArrayBuffer(4))
+    for range(500) as attempt
+        if fs.existsSync("${auditFile}.release")
+            return {
+                done: true
+            }
+        Atomics/wait(signal, 0, 0, 10)
+    throw "SlowTestWasNotReleased"

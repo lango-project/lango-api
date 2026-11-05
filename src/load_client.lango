@@ -1,0 +1,109 @@
+import js global Date
+import js global performance
+import js global fetch
+import js global AbortSignal
+import js global process
+import js global Atomics
+import js global Int32Array
+import js global SharedArrayBuffer
+import js "node:fs" as fs
+import "./http_test_support"
+    waitForTestFile(file, deadline)
+    writeTestResult(file, value)
+
+export main(args)
+
+class Client
+    methods
+        run()
+        request()
+        warmup(index)
+        sample(index)
+        finished()
+
+Client(file)
+    @settings = from_json(fs.readFileSync(file, "utf8"))
+    @latencies = []
+    @started = null
+    @errors = 0
+    @failure = null
+
+Client:run()
+    return warmup(0).then(()
+        settings = @settings
+        writeTestResult("${settings.output}.ready", {
+            ready: true
+        })
+        waitForTestFile(settings.start, Date/now() + 30000)
+        @started = Date/now()
+        return sample(0)
+    ).then(()
+        finished()
+    ).catch((error)
+        @failure = "${error}"
+        @errors = @errors + 1
+        finished()
+        process.exitCode = 1
+    )
+
+Client:request()
+    settings = @settings
+    options = {
+        method: "GET"
+        signal: AbortSignal/timeout(10000)
+    }
+    if !settings.health
+        options.method = "POST"
+        options.body = "{}"
+        options.headers = {
+            Authorization: "Bearer ${settings.token}"
+            "Content-Type": "application/json"
+        }
+    return fetch(settings.url, options).then((res)
+        if res.status != 200
+            @errors = @errors + 1
+        return res.json()
+    )
+
+Client:warmup(index)
+    if index == 2
+        return null
+    return request().then(()
+        capture index
+        return warmup(index + 1)
+    )
+
+Client:sample(index)
+    settings = @settings
+    if settings.health
+        if fs.existsSync(settings.stop)
+            return null
+      else
+          if index == settings.count
+              return null
+    started = performance/now()
+    return request().then(()
+        capture started
+        capture index
+        @latencies.add(performance/now() - started)
+        settings = @settings
+        if settings.health
+            signal = new Int32Array(new SharedArrayBuffer(4))
+            Atomics/wait(signal, 0, 0, 10)
+        return sample(index + 1)
+    )
+
+Client:finished()
+    settings = @settings
+    writeTestResult(settings.output, {
+        started: @started
+        finished: Date/now()
+        latencies: @latencies
+        errors: @errors
+        failure: @failure
+    })
+    return null
+
+main(args)
+    client = new Client(args[0])
+    return client.run()

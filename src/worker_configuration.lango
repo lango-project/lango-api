@@ -2,30 +2,44 @@ import js "node:fs" as fs
 import js "node:path" as path
 import js "node:os" as os
 import "./configuration"
-    workersEnabled(configuration)
     validateWorkers(configuration)
 import "./jwt_configuration"
     loadTokenOptions(settings, revocations = null)
 
-export workerConfiguration(configuration)
+import "./lifecycle"
+    createLifecycle(spec)
+import "./authorization"
+    createAuth(spec)
+import "./api_registry"
+    apiFromXml(xml)
+import "./package_modules"
+    prepareWorkerPackages(appRoot)
+    resolveModule(appRoot, moduleName)
 
-workerConfiguration(configuration)
+export workerConfiguration(configuration, routes = null)
+
+workerConfiguration(configuration, routes = null)
     validateWorkers(configuration)
-    if !workersEnabled(configuration)
-        return null
     if !is_string(configuration.appRoot) or configuration.appRoot == ""
         throw "ApiAppRootMustBeConfigured"
     if configuration.tokenService != null or configuration.stateStore != null
         throw "ApiWorkerInstancesMustBeCreatedInFactory"
-    if configuration.lifecycle != null
-        for configuration.lifecycle as name: handler
-            if handler != null
-                throw "ApiWorkerLifecycleMustBeCreatedInFactory"
     settings = configuration.workers
     appRoot = path.resolve(configuration.appRoot)
-    application = path.resolve(appRoot, settings.application)
-    if !fs.existsSync(application)
-        throw "ApiWorkerApplicationNotFound: ${application}"
+    lifecycle = parentLifecycle(configuration.lifecycle)
+    definitions = parentRoutes(routes)
+    apiXml = null
+    apiFile = configuration.apiFile
+    if apiFile == null and settings.application == null and routes == null
+        candidate = path.join(appRoot, "deploy", "api.xml")
+        if fs.existsSync(candidate)
+            apiFile = candidate
+    if apiFile != null
+        apiFile = path.resolve(apiFile)
+        if !fs.existsSync(apiFile)
+            throw "ApiConfigFileNotFound: ${apiFile}"
+        apiXml = fs.readFileSync(apiFile, "utf8")
+        apiFromXml(apiXml)
     state = configuration.state
     if state == null
         state = {
@@ -52,9 +66,19 @@ workerConfiguration(configuration)
     if settings.workerFile != null
         workerFile = path.resolve(appRoot, settings.workerFile)
     options = factoryOptions(configuration, appRoot, settings)
+    if configuration.mode != "server"
+        prepareWorkerPackages(appRoot)
+    application = settings.application
+    if application == null and apiXml == null and routes == null
+        application = "dist/worker.mjs"
+    if application != null
+        application = applicationFile(appRoot, application)
     return {
         appRoot: appRoot
         application: application
+        apiXml: apiXml
+        lifecycle: lifecycle
+        routeDefinitions: definitions
         workerFile: workerFile
         stateFile: file
         namespace: namespace
@@ -64,6 +88,9 @@ workerConfiguration(configuration)
         threads: settings.threads
         maxQueue: settings.maxQueue
         bodyLimit: settings.bodyLimit
+        requestTimeoutMs: settings.requestTimeoutMs
+        startupTimeoutMs: settings.startupTimeoutMs
+        shutdownTimeoutMs: settings.shutdownTimeoutMs
         tokens: tokens
         options: options
     }
@@ -155,7 +182,13 @@ test "worker configuration resolves application options keys and SQLite against 
         configuration.workers.enabled = false
         configuration.workers.application = "missing.mjs"
         configuration.workers.optionsFile = "missing.json"
-        assert workerConfiguration(configuration) == null
+        rejected = false
+        try
+            workerConfiguration(configuration)
+        catch error
+            assert error == "ApiWorkersRequired"
+            rejected = true
+        assert rejected
     finally
         fs.rmSync(directory, {
             recursive: true
@@ -188,3 +221,39 @@ test "worker configuration rejects parent process instances and lifecycle callba
 
 workerHook(input)
     return null
+
+applicationFile(appRoot, specifier)
+    file = path.resolve(appRoot, specifier)
+    if fs.existsSync(file)
+        return file
+    if !path.isAbsolute(specifier) and !specifier.startsWith(".") and !specifier.startsWith("dist/")
+        return resolveModule(appRoot, specifier)
+    throw "ApiWorkerApplicationNotFound: ${file}"
+
+parentLifecycle(spec)
+    handlers = createLifecycle(spec)
+    for handlers as event: handler
+        if handler != null
+            if !is_string(handler.module) or !is_string(handler.function)
+                throw "ApiWorkerLifecycleMustBeCreatedInFactory"
+    return handlers
+
+parentRoutes(routes)
+    if routes == null
+        return []
+    result = []
+    for routes as route
+        if route.handler != null or route.module != null or !is_string(route.mod) or !is_string(route.func)
+            throw "ApiWorkerRoutesMustBeCreatedInFactory"
+        auth = createAuth(route.auth)
+        if auth != null
+            if !is_string(auth.module) or !is_string(auth.function)
+                throw "ApiWorkerLifecycleMustBeCreatedInFactory"
+        result.add({
+            path: route.path
+            mod: route.mod
+            func: route.func
+            anonymous: route.anonymous
+            auth: auth
+        })
+    return result

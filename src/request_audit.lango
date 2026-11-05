@@ -1,64 +1,17 @@
-import js global Promise
 import js global Date
-import "./lifecycle"
-    callLifecycle(handler, metadata, appRoot)
-import "./ping"
-    isPingRequest(configuration, path)
 
-export observeRequest(configuration, httpResponse)
-
-observeRequest(configuration, httpResponse)
-    context request
-    context response
-    context log
-    if configuration.lifecycle.request == null
-        return null
-    if isPingRequest(configuration, request.path)
-        return null
-    started = Date/now()
-    httpResponse.once("finish", ()
-        capture configuration
-        capture started
-        capture request
-        capture response
-        capture log
-        notifyCompleted(configuration, started)
-    )
-    httpResponse.once("close", ()
-        capture httpResponse
-        capture request
-        capture log
-        if !httpResponse.writableFinished
-            log.warn("${request.method} ${request.path}: response did not finish")
-    )
-    return null
-
-notifyCompleted(configuration, started)
-    context request
-    context response
-    context log
-    return Promise/resolve().then(()
-        capture configuration
-        capture started
-        capture request
-        capture response
-        capture log
-        return auditCompleted(configuration, started)
-    ).catch((error)
-        capture log
-        log.err("Request audit callback failed")
-    )
-
-auditCompleted(configuration, started)
-    context request
-    context response
-    context log
-    snapshot = response.completedSnapshot()
-    metadata = requestMetadata(request, snapshot, started)
-    context request = auditRequest(request)
-    context response = new CompletedResponse(snapshot.status, snapshot.output)
-    context token = snapshot.token
-    return callLifecycle(configuration.lifecycle.request, metadata, configuration.appRoot)
+export requestMetadata(request, snapshot, started)
+export auditRequest(request)
+export class CompletedResponse
+    properties
+        statusCode
+        body
+    methods
+        status(code)
+        header(name, value)
+        send(value)
+        completed()
+        logout()
 
 requestMetadata(request, snapshot, started)
     timestamp = new Date()
@@ -104,17 +57,6 @@ auditRequest(request)
             "user-agent": request.headers["user-agent"]
         }
     }
-
-class CompletedResponse
-    properties
-        statusCode
-        body
-    methods
-        status(code)
-        header(name, value)
-        send(value)
-        completed()
-        logout()
 
 CompletedResponse(status, body)
     @statusCode = status

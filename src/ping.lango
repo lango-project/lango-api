@@ -1,42 +1,8 @@
-import js global Promise
 import js global Date
-import "./lifecycle"
-    callLifecycle(handler, metadata, appRoot)
+import "./synchronous"
+    requireSync(value)
 
-export processPing(configuration, input)
-export isPingRequest(configuration, path)
-
-isPingRequest(configuration, path)
-    return configuration.tokenService != null and path == "/_lango/ping"
-
-processPing(configuration, input)
-    context request
-    context response
-    context log
-    response.header("Cache-Control", "no-store")
-    return Promise/resolve().then(()
-        capture input
-        return validateForms(input)
-    ).then((forms)
-        capture configuration
-        return verifyForms(configuration.tokenService, forms, 0, [])
-    ).then((forms)
-        capture configuration
-        capture request
-        capture response
-        capture log
-        return renewForms(configuration, forms, 0, [])
-    ).then((forms)
-        capture response
-        return response.send({
-            forms: forms
-        })
-    ).catch((error)
-        capture request
-        capture response
-        capture log
-        pingFailed(error)
-    )
+export processSyncPing(service, handler, input)
 
 validateForms(input)
     if not is_object(input)
@@ -60,108 +26,12 @@ validateForms(input)
         })
     return result
 
-verifyForms(service, forms, index, verified)
-    if index == forms.length
-        return verified
-    form = forms[index]
-    return service.verify(form.token).catch((error)
-        throw "ApiPingUnauthorized"
-    ).then((claims)
-        capture form
-        capture service
-        capture forms
-        capture index
-        capture verified
-        validateIdentity(claims, form.formId)
-        verified.add({
-            formId: form.formId
-            claims: claims
-        })
-        return verifyForms(service, forms, index + 1, verified)
-    )
-
 validateIdentity(claims, formId)
     if !is_string(claims.clientId) or claims.clientId == "" or !is_string(claims.sessionId) or claims.sessionId == ""
         throw "ApiPingUnauthorized"
     if claims.formId != null and claims.formId != formId
         throw "ApiPingUnauthorized"
     return null
-
-renewForms(configuration, forms, index, renewed)
-    context request
-    context response
-    context log
-    if index == forms.length
-        return renewed
-    form = forms[index]
-    return renewForm(configuration, form).then((token)
-        capture configuration
-        capture forms
-        capture form
-        capture index
-        capture renewed
-        capture request
-        capture response
-        capture log
-        renewed.add({
-            formId: form.formId
-            token: token
-        })
-        return renewForms(configuration, forms, index + 1, renewed)
-    )
-
-renewForm(configuration, form)
-    context request
-    context log
-    context token = form.claims
-    context response = new PingResponse()
-    claims = form.claims
-    identity = {
-        clientId: claims.clientId
-        sessionId: claims.sessionId
-        sessionStartedAt: claims.sessionStartedAt
-        sessionExpiresAt: claims.sessionExpiresAt
-        formId: claims.formId
-        seqno: claims.seqno
-    }
-    timestamp = new Date()
-    metadata = {
-        ip: request.remoteAddress
-        timestamp: timestamp.toISOString()
-        clientId: claims.clientId
-        sessionId: claims.sessionId
-        formId: form.formId
-        url: request.path
-        queryString: ""
-    }
-    return Promise/resolve().then(()
-        capture configuration
-        capture metadata
-        capture request
-        capture response
-        capture token
-        capture log
-        return callLifecycle(configuration.lifecycle.ping, metadata, configuration.appRoot)
-    ).then(()
-        capture configuration
-        capture form
-        capture claims
-        capture identity
-        claims.clientId = identity.clientId
-        claims.sessionId = identity.sessionId
-        claims.sessionStartedAt = identity.sessionStartedAt
-        claims.sessionExpiresAt = identity.sessionExpiresAt
-        if identity.formId != null
-            claims.formId = identity.formId
-        if identity.seqno != null
-            claims.seqno = identity.seqno
-        validateIdentity(claims, form.formId)
-        return configuration.tokenService.sign(claims)
-    ).catch((error)
-        if error == "ApiInvalidToken"
-            throw "ApiPingUnauthorized"
-        throw "ApiPingFailed"
-    )
 
 pingFailed(error)
     context request
@@ -208,3 +78,66 @@ PingResponse:completed()
 
 PingResponse:logout()
     throw "ApiPingResponseIsManaged"
+
+processSyncPing(service, handler, input)
+    context response
+    response.header("Cache-Control", "no-store")
+    try
+        forms = validateForms(input)
+        verified = []
+        for forms as form
+            claims = null
+            try
+                claims = service.verify(form.token)
+            catch error
+                throw "ApiPingUnauthorized"
+            validateIdentity(claims, form.formId)
+            verified.add({
+                formId: form.formId
+                claims: claims
+            })
+        renewed = []
+        for verified as form
+            renewed.add({
+                formId: form.formId
+                token: renewSyncForm(service, handler, form)
+            })
+        return response.send({
+            forms: renewed
+        })
+    catch error
+        return pingFailed(error)
+
+renewSyncForm(service, handler, form)
+    context request
+    context log
+    claims = form.claims
+    identity = from_json(to_json(claims))
+    context token = claims
+    context response = new PingResponse()
+    timestamp = new Date()
+    metadata = {
+        ip: request.remoteAddress
+        timestamp: timestamp.toISOString()
+        clientId: claims.clientId
+        sessionId: claims.sessionId
+        formId: form.formId
+        url: request.path
+        queryString: ""
+    }
+    try
+        requireSync(handler(metadata))
+        claims.clientId = identity.clientId
+        claims.sessionId = identity.sessionId
+        claims.sessionStartedAt = identity.sessionStartedAt
+        claims.sessionExpiresAt = identity.sessionExpiresAt
+        if identity.formId != null
+            claims.formId = identity.formId
+        if identity.seqno != null
+            claims.seqno = identity.seqno
+        validateIdentity(claims, form.formId)
+        return service.sign(claims)
+    catch error
+        if error == "ApiInvalidToken"
+            throw "ApiPingUnauthorized"
+        throw "ApiPingFailed"

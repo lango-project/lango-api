@@ -106,8 +106,12 @@ slow(input)
         marker = "${marker}.second"
     fs.writeFileSync(marker, "${threads.threadId}")
     end = Date/now() + input.milliseconds
+    if input.controlled == true
+        end = Date/now() + 10000
     try
         loop while Date/now() < end
+            if input.controlled == true and fs.existsSync("${marker}.release")
+                break
             spin()
     finally
         fs.unlinkSync(marker)

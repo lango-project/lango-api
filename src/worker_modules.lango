@@ -1,0 +1,193 @@
+import js global Promise
+import "./worker_runtime"
+    class WorkerRuntime
+import "./api_registry"
+    apiFromXml(xml)
+    addRoute(routes, endpoint)
+import "./lifecycle"
+    createLifecycle(spec)
+    addLifecycle(handlers, options)
+import "./authorization"
+    createAuth(spec)
+import "./package_modules"
+    resolveModule(appRoot, moduleName)
+
+export initializeWorker(data)
+
+initializeWorker(data)
+    pending = Promise/resolve(emptyFactory)
+    if data.application != null
+        pending = loadFactory(data.application)
+    return pending.then((factory)
+        capture data
+        return prepareRuntime(data, factory)
+    )
+
+loadFactory(file)
+    return import_module(file).then((module)
+        return exportedFactory(module)
+    )
+
+prepareRuntime(data, factory)
+    runtime = new WorkerRuntime(data, factory)
+    pending = null
+    try
+        pending = preloadDefinition(data, runtime.definition())
+    catch failure
+        closeFailed(runtime, failure)
+    return pending.then(()
+        capture runtime
+        runtime.activate()
+        return runtime
+    ).catch((error)
+        capture runtime
+        return closeFailed(runtime, error)
+    )
+
+emptyFactory(options)
+    return {
+        routes: []
+    }
+
+exportedFactory(module)
+    if !is_kindof(module.createWorker, Function)
+        throw "ApiWorkerFactoryRequired"
+    return module.createWorker
+
+closeFailed(runtime, error)
+    try
+        runtime.close()
+    finally
+        throw error
+
+preloadDefinition(data, definition)
+    handlers = createLifecycle(definition.lifecycle)
+    for ["register", "start", "ping", "request"] as event
+        if definition[event] != null
+            hook = createAuth(definition[event])
+            addLifecycle(handlers, {
+                event: event
+                module: hook.module
+                function: hook.function
+            })
+    routes = []
+    for definition.routes as route
+        addRoute(routes, route)
+    if data.routeDefinitions != null
+        for data.routeDefinitions as route
+            addRoute(routes, route)
+    if data.apiXml != null
+        api = apiFromXml(data.apiXml)
+        for api.routes as route
+            addRoute(routes, route)
+        mergeLifecycle(handlers, api.lifecycle)
+    mergeLifecycle(handlers, createLifecycle(data.lifecycle))
+    definition.routes = routes
+    definition.register = handlers.register
+    definition.start = handlers.start
+    definition.ping = handlers.ping
+    definition.request = handlers.request
+    definition.close = createAuth(definition.close)
+    targets = []
+    for routes as route
+        route.auth = createAuth(route.auth)
+        if !is_kindof(route.handler, Function)
+            addTarget(targets, route, route.mod, route.module, route.func, true, route.path)
+        hookTarget(targets, route.auth, "${route.path} (auth)")
+    hookTarget(targets, definition.register, "lifecycle:register")
+    hookTarget(targets, definition.start, "lifecycle:start")
+    hookTarget(targets, definition.close, "lifecycle:close")
+    hookTarget(targets, definition.ping, "lifecycle:ping")
+    hookTarget(targets, definition.request, "lifecycle:request")
+    ready = preloadAt(data.appRoot, targets, 0, {
+    })
+    return ready.then(()
+        capture definition
+        return preloadResources(definition.preload, 0)
+    )
+
+mergeLifecycle(handlers, extra)
+    for extra as event: handler
+        if handler != null
+            addLifecycle(handlers, {
+                event: event
+                module: handler.module
+                function: handler.function
+            })
+    return null
+
+hookTarget(targets, hook, label)
+    if hook == null or is_kindof(hook.function, Function)
+        return null
+    moduleName = null
+    module = hook.module
+    if is_string(module)
+        moduleName = module
+        module = null
+    return addTarget(targets, hook, moduleName, module, hook.function, false, label)
+
+addTarget(targets, owner, moduleName, module, name, route, label)
+    if !is_string(name)
+        throw "ApiWorkerRequiresHandler: ${label}"
+    if moduleName == null
+        requireExport(module, name, label)
+        return null
+    targets.add({
+        owner: owner
+        moduleName: moduleName
+        name: name
+        route: route
+        label: label
+    })
+    return null
+
+requireExport(module, name, label)
+    if module == null
+        throw "ApiHandlerNotExported: ${label} -> ${name}"
+    if !is_kindof(module[name], Function)
+        throw "ApiHandlerNotExported: ${label} -> ${name}"
+    return null
+
+bindTarget(target, module)
+    requireExport(module, target.name, target.label)
+    owner = target.owner
+    owner.module = module
+    if target.route
+        owner.mod = null
+    return null
+
+preloadAt(appRoot, targets, index, cache)
+    if index >= targets.length
+        return Promise/resolve()
+    target = targets[index]
+    file = resolveModule(appRoot, target.moduleName)
+    if file in cache
+        bindTarget(target, cache[file])
+        return preloadAt(appRoot, targets, index + 1, cache)
+    return import_module(file).then((module)
+        capture appRoot
+        capture targets
+        capture index
+        capture cache
+        capture file
+        capture target
+        cache[file] = module
+        bindTarget(target, module)
+        return preloadAt(appRoot, targets, index + 1, cache)
+    )
+
+preloadResources(resources, index)
+    if resources == null
+        return null
+    if !is_array(resources)
+        throw "ApiWorkerPreloadMustBeArray"
+    if index == resources.length
+        return null
+    resource = resources[index]
+    if resource == null or !is_kindof(resource.preload, Function)
+        throw "ApiWorkerPreloadRequiresResource"
+    return Promise/resolve(resource.preload()).then(()
+        capture resources
+        capture index
+        return preloadResources(resources, index + 1)
+    )

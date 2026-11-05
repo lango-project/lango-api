@@ -1,15 +1,18 @@
-import "../../src/api_registry"
-    loadRoutes(apiFile)
-import "../../src/server"
-    start(configuration, routes)
+import js "node:path" as path
+import "../../src/library"
+    class Host
 
 export main(args)
 
 main(args)
-    configuration = {
+    host = new Host({
+        applicationName: "smoke"
         host: "127.0.0.1"
         port: 39457
-        appRoot: "/home/alparsla/src/lango-project/lango-api/test/smoke"
-    }
-    routes = loadRoutes("${configuration.appRoot}/deploy/api.xml")
-    start(configuration, routes)
+        appRoot: path.resolve("test/smoke")
+        stateDir: path.resolve(".test-output/smoke-state")
+        workers: {
+            workerFile: path.resolve("dist/worker_entry.mjs")
+        }
+    })
+    return host.start()

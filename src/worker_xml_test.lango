@@ -1,0 +1,272 @@
+import js "node:fs" as fs
+import js "node:path" as path
+import js "node:os" as os
+import js "node:crypto" as crypto
+import "./http_test_support"
+    class HttpTestServer
+
+export main(args)
+
+class Harness
+    methods
+        start(routes = null, register = false)
+        request(endpoint, allow = true)
+        xml()
+        withoutFiles()
+        restart()
+        startupFailures()
+        lifecycleFailure()
+        builder()
+        factory()
+        stopServer()
+        stop()
+
+Harness()
+    @directory = fs.mkdtempSync(path.join(os.tmpdir(), "lango-worker-xml-"))
+    @appRoot = path.join(@directory, "application")
+    @packageRoot = path.join(@directory, "package")
+    @link = path.join(@appRoot, "node_modules", "@worker-test", "hooks")
+    @apiFile = path.join(@appRoot, "deploy", "api.xml")
+    @host = new HttpTestServer(@directory)
+    @configuration = null
+    @token = null
+    fs.mkdirSync(path.dirname(@apiFile), {
+        recursive: true
+    })
+    fs.mkdirSync(path.join(@packageRoot, "src"), {
+        recursive: true
+    })
+    fs.mkdirSync(path.dirname(@link), {
+        recursive: true
+    })
+    fs.writeFileSync(path.join(@appRoot, "package.json"), to_json({
+        name: "worker-xml-test"
+        type: "module"
+    }))
+    fs.writeFileSync(path.join(@packageRoot, "package.json"), to_json({
+        name: "@worker-test/hooks"
+        version: "1.0.0"
+        type: "module"
+        exports: {
+            ".": "./dist/index.mjs"
+        }
+        lango: {
+            source: "src/index.lango"
+            output: "dist/index.mjs"
+        }
+        scripts: {
+            build: "lango run build.lango && lango build src/index.lango --out dist/index.mjs"
+        }
+    }))
+    fs.copyFileSync("src/worker_xml_fixture.lango", path.join(@packageRoot, "src", "index.lango"))
+    fs.copyFileSync("src/worker_linked_build.lango", path.join(@packageRoot, "build.lango"))
+    fs.symlinkSync(@packageRoot, @link, "junction")
+    xml = <api>
+        <auth name="allowed" mod="@worker-test/hooks" func="authorize" />
+        <event name="register" mod="@worker-test/hooks" func="registered" />
+        <group path="/xml" mod="@worker-test/hooks" anonymous="true" auth="allowed">
+            <endpoint path="/info" func="info" />
+            <endpoint path="/items/*" func="info" />
+        </group>
+    </api>
+    fs.writeFileSync(@apiFile, xml)
+    key = crypto/randomBytes(32)
+    fs.writeFileSync(path.join(@appRoot, "keys.json"), to_json({
+        current: key.toString("base64")
+    }))
+    @configuration = {
+        applicationName: "worker-xml"
+        appRoot: @appRoot
+        stateDir: path.join(@directory, "state")
+        host: "127.0.0.1"
+        port: 0
+        mode: "development"
+        workers: {
+            workerFile: path.resolve(".test-output/worker_entry.mjs")
+            threads: 4
+        }
+        jwt: {
+            issuer: "worker-xml"
+            audience: "browser"
+            activeKeyId: "current"
+            keysFile: path.join(@appRoot, "keys.json")
+        }
+    }
+
+Harness:start(routes = null, register = false)
+    events = [{
+        event: "start"
+        module: "@worker-test/hooks"
+        function: "started"
+    }]
+    if register
+        events.add({
+            event: "register"
+            module: "@worker-test/hooks"
+            function: "registered"
+        })
+    @host.start({
+        kind: "host"
+        settings: @configuration
+        events: events
+        routes: routes
+    })
+
+Harness:request(endpoint, allow = true)
+    return @host.request(endpoint, {
+        allow: allow
+    }, @token)
+
+Harness:xml()
+    assert fs.readFileSync(path.join(@packageRoot, "build-count.txt"), "utf8") == "build\n"
+    result = request("/xml/info")
+    assert result.status == 200
+    assert result.body.registered
+    assert result.body.started
+    assert !result.body.auth
+    assert result.body.clientId != "must-be-restored"
+    @token = result.token
+    result = request("/xml/items/42")
+    assert result.status == 200
+    assert result.body.path == "/xml/items/42"
+    denied = request("/xml/info", false)
+    assert denied.status == 403
+    @token = denied.token
+    result = request("/xml/info")
+    assert result.status == 200
+    assert !result.body.auth
+    println("PASS worker XML resolves groups, wildcard routes, named authorization and register/start modules before serving requests")
+
+Harness:withoutFiles()
+    fs.unlinkSync(@link)
+    fs.unlinkSync(path.join(@packageRoot, "dist", "index.mjs"))
+    pending = []
+    for range(8) as index
+        pending.add(@host.pending("/xml/info", {
+            allow: true
+        }, @token))
+    for pending as task
+        result = task.read()
+        assert result.status == 200
+        assert result.body.started
+    @host.stop()
+    println("PASS every worker retains preloaded handlers after the package link and module file disappear")
+
+Harness:restart()
+    fs.symlinkSync(@packageRoot, @link, "junction")
+    configuration = @configuration
+    configuration.mode = "server"
+    rejectedStart(@this, "Cannot find module")
+    configuration.mode = "development"
+    start()
+    assert fs.readFileSync(path.join(@packageRoot, "build-count.txt"), "utf8") == "build\nbuild\n"
+    assert request("/xml/info").status == 200
+    @host.stop()
+    println("PASS development rebuilds each linked package once; server mode never runs its build script")
+
+Harness:lifecycleFailure()
+    configuration = @configuration
+    configuration.mode = "server"
+    @token = null
+    bad = <api>
+        <event name="register" mod="@worker-test/hooks" func="broken" />
+        <endpoint path="/xml/info" mod="@worker-test/hooks" func="info" anonymous="true" />
+    </api>
+    fs.writeFileSync(@apiFile, bad)
+    start()
+    result = request("/xml/info")
+    assert result.status == 500
+    assert result.token == null
+    assert result.body.error == "InternalServerError"
+    @host.stop()
+    println("PASS failed worker lifecycle hooks never issue a token or expose private errors")
+
+Harness:startupFailures()
+    configuration = @configuration
+    configuration.mode = "server"
+    bad = <api><endpoint path="/bad" mod="@worker-test/hooks" func="missing" anonymous="true" /></api>
+    fs.writeFileSync(@apiFile, bad)
+    rejectedStart(@this, "ApiHandlerNotExported")
+    bad = <api><event name="start" mod="@worker-test/hooks" func="started" /></api>
+    fs.writeFileSync(@apiFile, bad)
+    rejectedStart(@this, "ApiDuplicateLifecycleEvent")
+    bad = <api><event name="ping" mod="@worker-test/hooks" func="missing" /></api>
+    fs.writeFileSync(@apiFile, bad)
+    rejectedStart(@this, "ApiHandlerNotExported")
+    bad = <api>
+        <endpoint path="/same" mod="@worker-test/hooks" func="info" />
+        <endpoint path="/same" mod="@worker-test/hooks" func="info" />
+    </api>
+    fs.writeFileSync(@apiFile, bad)
+    rejectedStart(@this, "ApiDuplicateEndpointPath")
+    println("PASS missing exports, conflicting hooks/routes and missing lifecycle exports fail startup")
+
+Harness:builder()
+    configuration = @configuration
+    configuration.apiFile = null
+    @token = null
+    start([{
+        path: "/builder"
+        module: "@worker-test/hooks"
+        function: "info"
+        anonymous: true
+    }], true)
+    result = request("/builder")
+    assert result.status == 200
+    assert result.body.registered
+    assert result.body.started
+    println("PASS parent-side route and lifecycle builders accept transferable module descriptors")
+
+Harness:factory()
+    @host.stop()
+    configuration = @configuration
+    configuration.lifecycle = null
+    configuration.workers.application = "@worker-test/hooks"
+    @token = null
+    @host.start({
+        kind: "host"
+        settings: configuration
+    })
+    result = request("/factory")
+    assert result.status == 200
+    assert result.body.registered
+    assert result.body.started
+    println("PASS the worker factory can itself be an npm package export")
+
+rejectedStart(harness, expected)
+    failed = false
+    try
+        harness.start()
+    catch error
+        message = "${error}"
+        assert message.includes(expected)
+        failed = true
+    finally
+        harness.stopServer()
+    assert failed
+
+Harness:stopServer()
+    @host.stop()
+
+Harness:stop()
+    try
+        @host.stop()
+    finally
+        fs.rmSync(@directory, {
+            recursive: true
+            force: true
+        })
+
+main(args)
+    harness = new Harness()
+    try
+        harness.start()
+        harness.xml()
+        harness.withoutFiles()
+        harness.restart()
+        harness.lifecycleFailure()
+        harness.startupFailures()
+        harness.builder()
+        harness.factory()
+    finally
+        harness.stop()

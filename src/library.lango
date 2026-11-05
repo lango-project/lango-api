@@ -1,30 +1,17 @@
 import js global Promise
+import js "node:path" as path
 import "./api_registry"
     addRoute(routes, endpoint)
     createEndpoint(options)
-    loadApi(apiFile)
     anonymousValue(value)
-import "./package_modules"
-    prepareLinkedPackages(appRoot, routes)
-    validateRouteModules(appRoot, routes)
-import "./server"
-    alias startServer = start(configuration, routes)
 import "./authorization"
     createAuth(spec)
     resolveAuth(spec, definitions)
-import "./jwt_configuration"
-    configureTokenService(configuration)
-import "./state"
-    configureState(configuration)
-    closeOwnedState(configuration)
 import "./lifecycle"
     createLifecycle(spec)
     addLifecycle(handlers, options)
-    lifecycleTargets(handlers)
-import "./configuration"
-    workersEnabled(configuration)
 import "./worker_configuration"
-    workerConfiguration(configuration)
+    workerConfiguration(configuration, routes = null)
 import "./worker_host"
     class WorkerHost
 
@@ -47,67 +34,31 @@ Host(configuration)
     @configuration = configuration
     configuration.lifecycle = createLifecycle(configuration.lifecycle)
     @routes = null
-    @xmlLifecycle = createLifecycle(null)
     @server = null
     @workers = null
 
 Host:routes(routes)
     @routes = routes.values()
-    @xmlLifecycle = createLifecycle(null)
     return @this
 
 Host:routesFromXml(apiFile)
-    api = loadApi(apiFile)
     configuration = @configuration
-    mergeLifecycle(configuration.lifecycle, api.lifecycle)
-    @routes = api.routes
-    @xmlLifecycle = api.lifecycle
+    configuration.apiFile = path.resolve(apiFile)
+    @routes = null
     return @this
 
 Host:on(options)
     configuration = @configuration
     handlers = createLifecycle(configuration.lifecycle)
     addLifecycle(handlers, options)
-    mergeLifecycle(handlers, @xmlLifecycle)
     configuration.lifecycle = handlers
     return @this
 
 Host:start()
-    if workersEnabled(@configuration)
-        if @routes != null
-            throw "ApiWorkerRoutesMustBeCreatedInFactory"
-        return startWorkers()
-    if @routes == null
-        throw "ApiRoutesNotConfigured"
-    configuration = @configuration
-    routes = @routes
-    targets = routes.slice()
-    pending = null
-    try
-        configureState(configuration)
-        configureTokenService(configuration)
-        configuration = withXmlLifecycle(configuration, @xmlLifecycle)
-        for lifecycleTargets(configuration.lifecycle) as target
-            targets.add(target)
-        prepareLinkedPackages(configuration.appRoot, targets)
-        pending = validateRouteModules(configuration.appRoot, targets)
-    catch error
-        closeOwnedState(configuration)
-        throw error
-    return pending.then(()
-        capture configuration
-        capture routes
-        server = startServer(configuration, routes)
-        @server = server
-        return server
-    ).catch((failure)
-        capture configuration
-        closeOwnedState(configuration)
-        throw failure
-    )
+    return startWorkers()
 
 Host:startWorkers()
-    settings = workerConfiguration(@configuration)
+    settings = workerConfiguration(@configuration, @routes)
     @workers = new WorkerHost(settings)
     return @workers.start().then((host)
         @server = host.server
@@ -118,39 +69,9 @@ Host:startWorkers()
     )
 
 Host:close()
-    if @workers != null
-        return @workers.close()
-    server = @server
-    if server == null or !server.listening
+    if @workers == null
         return Promise/resolve()
-    closed = new Promise((resolve, reject)
-        capture server
-        server.once("close", ()
-            capture resolve
-            resolve()
-        )
-        server.close()
-    )
-    return closed
-
-mergeLifecycle(base, extra)
-    handlers = createLifecycle(base)
-    for extra as event: handler
-        if handler != null
-            addLifecycle(handlers, {
-                event: event
-                module: handler.module
-                function: handler.function
-            })
-    return handlers
-
-withXmlLifecycle(configuration, lifecycle)
-    result = {
-    }
-    for configuration as name: value
-        result[name] = value
-    result.lifecycle = mergeLifecycle(configuration.lifecycle, lifecycle)
-    return result
+    return @workers.close()
 
 Routes()
     @items = []
@@ -289,48 +210,3 @@ allowAuthForTest(path, input)
 
 denyAuthForTest(path, input)
     return false
-
-test "startup rejects a missing lifecycle module export"
-    handlers = createLifecycle({
-        start: {
-            module: {
-            }
-            function: "missing"
-        }
-    })
-    try
-        validateRouteModules("/tmp", lifecycleTargets(handlers))
-        assert false
-    catch error
-        assert error == "ApiHandlerNotExported: lifecycle:start -> missing"
-
-test "startup rejects a missing request audit module export"
-    handlers = createLifecycle({
-        request: {
-            module: {
-            }
-            function: "missing"
-        }
-    })
-    try
-        validateRouteModules("/tmp", lifecycleTargets(handlers))
-        assert false
-    catch error
-        assert error == "ApiHandlerNotExported: lifecycle:request -> missing"
-
-test "XML and code lifecycle registrations merge without silent overrides"
-    base = createLifecycle({
-        register: allowAuthForTest
-    })
-    extra = createLifecycle({
-        start: denyAuthForTest
-    })
-    combined = mergeLifecycle(base, extra)
-    assert combined.register.function == allowAuthForTest
-    assert combined.start.function == denyAuthForTest
-    assert base.start == null
-    try
-        mergeLifecycle(base, base)
-        assert false
-    catch error
-        assert error == "ApiDuplicateLifecycleEvent: register"

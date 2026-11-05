@@ -1,12 +1,9 @@
-import js global Promise
-import js global TextDecoder
 import js global Uint8Array
 import js global Date
 import js global Reflect
 import js global Math
 import js "node:crypto" as crypto
 import js "node:util" as util
-import js "jose" as jose
 import js "jsonwebtoken" as jwt
 import js "node:buffer" as buffer
 import "./synchronous"
@@ -24,16 +21,10 @@ export class TokenService
         revoke(claims)
         checkSession(claims)
 
-export class SyncTokenService
-    methods
-        sign(claims)
-        verify(token)
-        verifySigned(token)
-        restart(token)
-        startSession(token)
-        recoverClient(token)
-        revoke(claims)
-        checkSession(claims)
+export class SyncTokenService : TokenService
+
+SyncTokenService(options)
+    super(options)
 
 export class MemorySessionRevocations
     methods
@@ -64,16 +55,6 @@ MemorySessionRevocations:isRevoked(sessionId)
         Reflect/deleteProperty(@sessions, key)
         return false
     return true
-
-TokenService(options)
-    settings = tokenSettings(options)
-    @issuer = settings.issuer
-    @audience = settings.audience
-    @activeKeyId = settings.activeKeyId
-    @ttl = settings.ttl
-    @sessionTtl = settings.sessionTtl
-    @keys = settings.keys
-    @revocations = settings.revocations
 
 tokenSettings(options)
     if !is_string(options.issuer) or options.issuer == ""
@@ -118,122 +99,6 @@ tokenSettings(options)
         revocations: revocations
     }
 
-TokenService:sign(claims)
-    if not is_object(claims)
-        throw "ApiTokenClaimsMustBeMap"
-    payload = {
-    }
-    for claims as name: value
-        if name == "__proto__" or name == "constructor" or name == "prototype"
-            throw "ApiTokenReservedClaimName"
-        payload[name] = value
-    if payload.auth == null
-        payload.auth = false
-    if not is_bool(payload.auth)
-        throw "ApiTokenAuthMustBeBoolean"
-    if payload.clientId == null
-        payload.clientId = crypto/randomUUID()
-    if payload.sessionId == null
-        payload.sessionId = crypto/randomUUID()
-    requireTokenIdentity(payload)
-    if payload.sessionStartedAt == null and payload.sessionExpiresAt == null
-        stampSession(payload, @sessionTtl)
-    now = Math/floor(Date/now() / 1000)
-    deadline = sessionDeadline(payload, @sessionTtl)
-    expiresAt = now + @ttl
-    if deadline < expiresAt
-        expiresAt = deadline
-    signer = new jose/SignJWT(payload)
-    signer.setProtectedHeader({
-        alg: "HS256"
-        typ: "lango+jwt"
-        kid: @activeKeyId
-    })
-    signer.setIssuer(@issuer)
-    signer.setAudience(@audience)
-    signer.setIssuedAt(now)
-    signer.setExpirationTime(expiresAt)
-    signer.setJti(crypto/randomUUID())
-    key = @keys[@activeKeyId]
-    return checkSession(payload).then(()
-        capture signer
-        capture key
-        return signer.sign(key)
-    ).then((token)
-        capture payload
-        return checkedToken(@this, payload, token)
-    )
-
-checkedToken(service, claims, token)
-    return service.checkSession(claims).then(()
-        capture token
-        return token
-    )
-
-TokenService:checkSession(claims)
-    store = @revocations
-    sessionTtl = @sessionTtl
-    return Promise/resolve().then(()
-        capture store
-        capture claims
-        capture sessionTtl
-        sessionDeadline(claims, sessionTtl)
-        return store.isRevoked(claims.sessionId)
-    ).then((revoked)
-        capture claims
-        capture sessionTtl
-        if !is_bool(revoked) or revoked
-            throw "ApiInvalidToken"
-        sessionDeadline(claims, sessionTtl)
-        return null
-    )
-
-TokenService:revoke(claims)
-    if !is_object(claims) or !is_string(claims.sessionId) or claims.sessionId == ""
-        throw "ApiTokenSessionRequired"
-    store = @revocations
-    sessionId = claims.sessionId
-    expiresAt = Date/now() / 1000 + @ttl + 5
-    return Promise/resolve().then(()
-        capture store
-        capture sessionId
-        capture expiresAt
-        return store.revoke(sessionId, expiresAt)
-    )
-
-TokenService:verify(token)
-    return Promise/resolve().then(()
-        capture token
-        return verifySigned(token)
-    ).then((verified)
-        claims = verifiedPayload(verified)
-        return verifiedSession(@this, claims)
-    ).catch((error)
-        throw "ApiInvalidToken"
-    )
-
-verifiedSession(service, claims)
-    return service.checkSession(claims).then(()
-        capture claims
-        return claims
-    )
-
-TokenService:verifySigned(token)
-    if !is_string(token) or token.length > 16384
-        throw "ApiInvalidToken"
-    header = jose/decodeProtectedHeader(token)
-    if !is_string(header.kid) or !util/types/isUint8Array(@keys[header.kid])
-        throw "ApiInvalidToken"
-    return jose/jwtVerify(token, @keys[header.kid], {
-        algorithms: ["HS256"]
-        typ: "lango+jwt"
-        issuer: @issuer
-        audience: @audience
-        requiredClaims: ["iat", "exp", "jti"]
-        maxTokenAge: @ttl
-        clockTolerance: 5
-    })
-
 verifiedPayload(verified)
     if not is_bool(verified.payload.auth)
         throw "ApiInvalidToken"
@@ -247,42 +112,6 @@ requireTokenIdentity(claims)
         throw "ApiInvalidToken"
     return null
 
-TokenService:restart(token)
-    return startSession(token).then((session)
-        return session.claims
-    )
-
-TokenService:startSession(token)
-    sessionTtl = @sessionTtl
-    return Promise/resolve().then(()
-        capture token
-        return recoverIdentity(@this, token)
-    ).catch((error)
-        return newIdentity()
-    ).then((identity)
-        capture sessionTtl
-        return {
-            claims: restartedClaims(identity.clientId, sessionTtl)
-            registered: identity.registered
-        }
-    )
-
-TokenService:recoverClient(token)
-    if !is_string(token) or token.length > 16384
-        throw "ApiInvalidToken"
-    header = jose/decodeProtectedHeader(token)
-    if header.typ != "lango+jwt" or !is_string(header.kid) or !util/types/isUint8Array(@keys[header.kid])
-        throw "ApiInvalidToken"
-    issuer = @issuer
-    audience = @audience
-    return jose/compactVerify(token, @keys[header.kid], {
-        algorithms: ["HS256"]
-    }).then((verified)
-        capture issuer
-        capture audience
-        return recoveredClientId(verified, issuer, audience)
-    )
-
 newIdentity()
     return {
         clientId: crypto/randomUUID()
@@ -294,11 +123,6 @@ recoveredIdentity(clientId)
         clientId: clientId
         registered: false
     }
-
-recoverIdentity(service, token)
-    return service.recoverClient(token).then((clientId)
-        return recoveredIdentity(clientId)
-    )
 
 restartedClaims(clientId, sessionTtl)
     claims = {
@@ -329,19 +153,10 @@ sessionDeadline(claims, sessionTtl)
         throw "ApiInvalidToken"
     return deadline
 
-recoveredClientId(verified, issuer, audience)
-    decoder = new TextDecoder()
-    claims = from_json(decoder.decode(verified.payload))
-    if claims.iss != issuer or claims.aud != audience
-        throw "ApiInvalidToken"
-    if !is_string(claims.clientId) or claims.clientId == "" or claims.clientId.length > 128
-        throw "ApiInvalidToken"
-    return claims.clientId
-
-SyncTokenService(options)
+TokenService(options)
     @settings = tokenSettings(options)
 
-SyncTokenService:sign(claims)
+TokenService:sign(claims)
     settings = @settings
     if not is_object(claims)
         throw "ApiTokenClaimsMustBeMap"
@@ -383,7 +198,7 @@ SyncTokenService:sign(claims)
     checkSession(payload)
     return token
 
-SyncTokenService:checkSession(claims)
+TokenService:checkSession(claims)
     settings = @settings
     sessionDeadline(claims, settings.sessionTtl)
     revoked = requireSync(settings.revocations.isRevoked(claims.sessionId))
@@ -392,13 +207,13 @@ SyncTokenService:checkSession(claims)
     sessionDeadline(claims, settings.sessionTtl)
     return null
 
-SyncTokenService:revoke(claims)
+TokenService:revoke(claims)
     if !is_object(claims) or !is_string(claims.sessionId) or claims.sessionId == ""
         throw "ApiTokenSessionRequired"
     settings = @settings
     return requireSync(settings.revocations.revoke(claims.sessionId, Date/now() / 1000 + settings.ttl + 5))
 
-SyncTokenService:readSigned(token, recovery)
+TokenService:readSigned(token, recovery)
     settings = @settings
     if !is_string(token) or token.length > 16384
         throw "ApiInvalidToken"
@@ -440,10 +255,10 @@ SyncTokenService:readSigned(token, recovery)
         protectedHeader: header
     }
 
-SyncTokenService:verifySigned(token)
+TokenService:verifySigned(token)
     return readSigned(token, false)
 
-SyncTokenService:verify(token)
+TokenService:verify(token)
     try
         claims = verifiedPayload(verifySigned(token))
         checkSession(claims)
@@ -451,7 +266,7 @@ SyncTokenService:verify(token)
     catch error
         throw "ApiInvalidToken"
 
-SyncTokenService:recoverClient(token)
+TokenService:recoverClient(token)
     verified = readSigned(token, true)
     settings = @settings
     claims = verified.payload
@@ -461,7 +276,7 @@ SyncTokenService:recoverClient(token)
         throw "ApiInvalidToken"
     return claims.clientId
 
-SyncTokenService:startSession(token)
+TokenService:startSession(token)
     identity = null
     try
         identity = recoveredIdentity(recoverClient(token))
@@ -473,6 +288,6 @@ SyncTokenService:startSession(token)
         registered: identity.registered
     }
 
-SyncTokenService:restart(token)
+TokenService:restart(token)
     session = startSession(token)
     return session.claims

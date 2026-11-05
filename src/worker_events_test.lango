@@ -1,0 +1,476 @@
+import js global Promise
+import js global AbortController
+import js "node:timers/promises" as timers
+import js global fetch
+import js global Date
+import js global Math
+import js "jsonwebtoken" as jwt
+import js global process
+import js "node:fs" as fs
+import js "node:path" as path
+import js "node:os" as os
+import js "node:crypto" as crypto
+import "./library"
+    class Host
+import "./tokens"
+    class SyncTokenService
+
+export main(args)
+
+class Harness
+    methods
+        start(tokens = true)
+        request(endpoint, input, token = null, method = "POST")
+        ping(input)
+        forms()
+        failures()
+        audit()
+        anonymous()
+        stop()
+
+Harness()
+    @directory = fs.mkdtempSync(path.join(os.tmpdir(), "lango-worker-events-"))
+    @auditFile = path.join(@directory, "audit.jsonl")
+    @host = null
+    @url = null
+    @first = null
+    @second = null
+    @count = 0
+    key = crypto/randomBytes(32)
+    fs.writeFileSync(path.join(@directory, "keys.json"), to_json({
+        current: key.toString("base64")
+    }))
+    @key = key
+    @service = new SyncTokenService({
+        issuer: "worker-events"
+        audience: "browser"
+        activeKeyId: "current"
+        keys: {
+            current: key
+        }
+    })
+
+Harness:start(tokens = true)
+    module = path.resolve(".test-output/worker_events_fixture.mjs")
+    xml = <api>
+        <event name="ping" mod="${module}" func="pinged" />
+        <event name="request" mod="${module}" func="audited" />
+    </api>
+    apiFile = path.join(@directory, "api.xml")
+    fs.writeFileSync(apiFile, xml)
+    @host = new Host({
+        applicationName: "worker-events"
+        appRoot: @directory
+        stateDir: path.join(@directory, "state")
+        apiFile: apiFile
+        host: "127.0.0.1"
+        port: 0
+        mode: "server"
+        workers: {
+            application: module
+            workerFile: path.resolve(".test-output/worker_entry.mjs")
+            threads: 2
+            bodyLimit: 4096
+            options: {
+                auditFile: @auditFile
+            }
+        }
+        jwt: {
+            enabled: tokens
+            issuer: "worker-events"
+            audience: "browser"
+            activeKeyId: "current"
+            keysFile: path.join(@directory, "keys.json")
+        }
+    })
+    return @host.start().then((server)
+        address = server.address()
+        @url = "http://127.0.0.1:${address.port}"
+    )
+
+Harness:request(endpoint, input, token = null, method = "POST")
+    headers = {
+        "Content-Type": "application/json"
+        Cookie: "must-not-enter-audit"
+    }
+    if token != null
+        headers.Authorization = "Bearer ${token}"
+    body = input
+    if !is_string(body)
+        body = to_json(input)
+    if method == "GET"
+        body = null
+    return fetch("${@url}${endpoint}", {
+        method: method
+        headers: headers
+        body: body
+    }).then((res)
+        return decode(res)
+    )
+
+decode(res)
+    return res.json().then((body)
+        capture res
+        return {
+            status: res.status
+            body: body
+            token: res.headers.get("x-lango-token")
+            authenticate: res.headers.get("www-authenticate")
+            cache: res.headers.get("cache-control")
+        }
+    )
+
+Harness:ping(input)
+    return request("/_lango/ping", input)
+
+Harness:forms()
+    return request("/echo", {
+        formId: "first"
+        seqno: 4
+    }).then((result)
+        assert result.status == 200
+        @first = result.token
+        return request("/echo", {
+            formId: "second"
+            seqno: 12
+        })
+    ).then((result)
+        @second = result.token
+        return ping({
+            forms: [{
+                formId: "first"
+                token: @first
+            }, {
+                formId: "second"
+                token: @second
+            }]
+        })
+    ).then((result)
+        assert result.status == 200
+        assert result.token == null
+        assert result.cache == "no-store"
+        assert result.body.forms.length == 2
+        for result.body.forms as form
+            original = @first
+            if form.formId == "second"
+                original = @second
+            before = @service.verify(original)
+            after = @service.verify(form.token)
+            assert after.clientId == before.clientId
+            assert after.sessionId == before.sessionId
+            assert after.sessionStartedAt == before.sessionStartedAt
+            assert after.sessionExpiresAt == before.sessionExpiresAt
+            assert after.formId == before.formId
+            assert after.seqno == before.seqno
+            assert after.pingCount == 1
+        println("PASS worker ping renews each form independently with managed response/context and preserved identity/sequence")
+    )
+
+Harness:failures()
+    payload = @service.verify(@first)
+    now = Math/floor(Date/now() / 1000)
+    payload.iat = now - 20
+    payload.exp = now - 10
+    expired = jwt/default/sign(payload, @key, {
+        algorithm: "HS256"
+        keyid: "current"
+        header: {
+            typ: "lango+jwt"
+        }
+    })
+    cases = [{
+        input: {
+            forms: []
+        }
+        status: 400
+    }, {
+        input: {
+            forms: [{
+                formId: "a"
+                token: "bad"
+            }]
+        }
+        status: 401
+    }, {
+        input: {
+            forms: [{
+                formId: "wrong"
+                token: @first
+            }]
+        }
+        status: 401
+    }, {
+        input: {
+            forms: [{
+                formId: "first"
+                token: @first
+            }, {
+                formId: "first"
+                token: @first
+            }]
+        }
+        status: 400
+    }]
+    cases.add({
+        input: {
+            forms: [{
+                formId: "first"
+                token: @first
+            }, {
+                formId: "second"
+                token: "bad"
+            }]
+        }
+        status: 401
+    })
+    cases.add({
+        input: {
+            forms: [{
+                formId: "first"
+                token: expired
+            }]
+        }
+        status: 401
+    })
+    return checkCases(@this, cases, 0).then(()
+        capture fs
+        assert fs.readFileSync("${@auditFile}.ping", "utf8") == "called\ncalled\n"
+        return checkModes(@this, ["throw", "promise", "send", "logout"], 0)
+    ).then(()
+        return request("/_lango/logout", {
+        }, @second)
+    ).then((result)
+        assert result.status == 200
+        assert result.token == null
+        return ping({
+            forms: [{
+                formId: "second"
+                token: @second
+            }]
+        })
+    ).then((result)
+        assert result.status == 401
+        assert result.token == null
+        println("PASS worker ping validates the entire batch before hooks and rejects malformed, expired/revoked tokens, Promise hooks and managed-response writes")
+    )
+
+checkCases(harness, cases, index)
+    if index == cases.length
+        return Promise/resolve()
+    item = cases[index]
+    return harness.ping(item.input).then((result)
+        capture harness
+        capture cases
+        capture index
+        capture item
+        assert result.status == item.status
+        assert result.token == null
+        body = result.body
+        assert body.forms == null
+        if item.status == 401
+            assert result.authenticate == "Bearer"
+        return checkCases(harness, cases, index + 1)
+    )
+
+checkModes(harness, modes, index)
+    if index == modes.length
+        return Promise/resolve()
+    return harness.request("/echo", {
+        formId: "mode"
+        seqno: 1
+        mode: modes[index]
+    }).then((result)
+        capture harness
+        return harness.ping({
+            forms: [{
+                formId: "mode"
+                token: result.token
+            }]
+        })
+    ).then((result)
+        capture harness
+        capture modes
+        capture index
+        assert result.status == 500
+        assert result.body.error == "InternalServerError"
+        assert result.token == null
+        return checkModes(harness, modes, index + 1)
+    )
+
+Harness:audit()
+    return request("/echo", {
+        transactionId: "transaction"
+        formId: "audit"
+        seqno: 2
+        auditMode: "throw"
+    }, @first).then((result)
+        assert result.status == 200
+        body = result.body
+        assert body.auditOnly == null
+        claims = @service.verify(result.token)
+        assert claims.auditOnly == null
+        assert claims.changedAfterSend == null
+        return request("/fail", {
+            auditMode: "promise"
+        }, @first)
+    ).then((result)
+        assert result.status == 500
+        claims = @service.verify(result.token)
+        assert !claims.auth
+        return request("/echo", "{bad")
+    ).then((result)
+        assert result.status == 400
+        return request("/missing", {
+        })
+    ).then((result)
+        assert result.status == 404
+        return request("/echo?x=y", {
+        })
+    ).then((result)
+        assert result.status == 400
+        return request("/echo", null, null, "GET")
+    ).then((result)
+        assert result.status == 405
+        oversized = "x"
+        return request("/echo", oversized.repeat(5000))
+    ).then((result)
+        assert result.status == 413
+        return request("/echo", {
+            auditMode: "send"
+        })
+    ).then((result)
+        assert result.status == 200
+        return abortRequest(@url, @auditFile)
+    ).then(()
+        return @host.close()
+    ).then(()
+        records = readRecords(@auditFile)
+        @count = records.length
+        assert records.length == 15
+        statuses = []
+        transaction = null
+        for records as record
+            metadata = record.metadata
+            assert metadata.url != "/_lango/ping"
+            assert metadata.durationMs >= 0
+            assert is_string(metadata.timestamp)
+            assert to_json(metadata.output) == to_json(record.body)
+            input = metadata.input
+            if is_object(input)
+                assert input.changedAfterSend == null
+            claims = record.token
+            assert claims.changedAfterSend == null
+            statuses.add(metadata.status)
+            if metadata.transactionId == "transaction"
+                transaction = record
+            if metadata.status == 500
+                assert !record.token.auth
+        assert statuses.includes(400)
+        assert statuses.includes(401) == false
+        assert statuses.includes(404)
+        assert statuses.includes(405)
+        assert statuses.includes(413)
+        assert transaction.metadata.formId == "audit"
+        assert transaction.metadata.seqno == 2
+        original = @service.verify(@first)
+        assert transaction.token.clientId == original.clientId
+        println("PASS worker request audit runs after HTTP finish, snapshots sent data, omits ping/secrets and isolates callback failures including transport errors")
+    )
+
+readRecords(file)
+    lines = fs.readFileSync(file, "utf8").trim().split("\n")
+    records = []
+    for lines as line
+        records.add(from_json(line))
+    return records
+
+Harness:anonymous()
+    return start(false).then(()
+        return request("/echo", {
+            auditMode: "promise"
+        })
+    ).then((result)
+        assert result.status == 200
+        assert result.token == null
+        return @host.close()
+    ).then(()
+        records = readRecords(@auditFile)
+        assert records.length == @count + 1
+        last = records[records.length - 1]
+        assert !last.token.auth
+        claims = last.token
+        assert claims.clientId == null
+        println("PASS worker request audit also works without JWT configuration and graceful shutdown drains audit tasks")
+    )
+
+Harness:stop()
+    if @host == null
+        removeDirectory(@directory)
+        return Promise/resolve()
+    return @host.close().finally(()
+        removeDirectory(@directory)
+    )
+
+removeDirectory(directory)
+    fs.rmSync(directory, {
+        recursive: true
+        force: true
+    })
+    return null
+
+main(args)
+    harness = new Harness()
+    return harness.start().then(()
+        capture harness
+        return harness.forms()
+    ).then(()
+        capture harness
+        return harness.failures()
+    ).then(()
+        capture harness
+        return harness.audit()
+    ).then(()
+        capture harness
+        return harness.anonymous()
+    ).finally(()
+        capture harness
+        return harness.stop()
+    )
+
+abortRequest(url, file)
+    controller = new AbortController()
+    pending = fetchAborted(url, controller)
+    return waitForFile("${file}.slow", 0).then(()
+        capture controller
+        capture timers
+        controller.abort()
+        return timers/setTimeout(20)
+    ).then(()
+        capture fs
+        capture file
+        capture pending
+        fs.writeFileSync("${file}.release", "release")
+        return pending
+    )
+
+waitForFile(file, attempt)
+    if fs.existsSync(file)
+        return Promise/resolve()
+    if attempt >= 200
+        throw "TimedOutWaitingForWorker"
+    return timers/setTimeout(10).then(()
+        capture file
+        capture attempt
+        return waitForFile(file, attempt + 1)
+    )
+
+fetchAborted(url, controller)
+    return fetch("${url}/slow", {
+        method: "POST"
+        body: "{}"
+        signal: controller.signal
+    }).then((res)
+        throw "ExpectedAbortedResponse"
+    ).catch((error)
+        assert error.name == "AbortError"
+    )

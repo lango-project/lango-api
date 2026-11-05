@@ -1,4 +1,9 @@
+import js global AbortController
+import js global setTimeout
+import js global clearTimeout
 import js global Promise
+import js global Date
+import js global WeakMap
 import js global Buffer
 import js global structuredClone
 import js "node:crypto" as crypto
@@ -6,6 +11,8 @@ import js "node:http" as http
 import js "node:path" as path
 import js "node:module" as nodeModule
 import js "piscina" as piscina
+import "./state"
+    class SqliteStateStore
 
 export startWorkers(configuration)
 
@@ -24,8 +31,11 @@ startWorkers(configuration)
     return host.start()
 
 WorkerHost(configuration)
-    if !is_string(configuration.application) or !path.isAbsolute(configuration.application)
-        throw "ApiWorkerApplicationMustBeAbsolute"
+    if configuration.application != null
+        if !is_string(configuration.application) or !path.isAbsolute(configuration.application)
+            throw "ApiWorkerApplicationMustBeAbsolute"
+    if configuration.application == null and configuration.apiXml == null and configuration.routeDefinitions == null
+        throw "ApiWorkerSourceRequired"
     if !is_string(configuration.stateFile) or !path.isAbsolute(configuration.stateFile)
         throw "ApiWorkerStateFileMustBeAbsolute"
     @configuration = configuration
@@ -37,6 +47,17 @@ WorkerHost(configuration)
     threads = positiveOption(configuration.threads, 2)
     if threads > 128
         throw "ApiWorkerThreadLimit"
+    @threads = threads
+    @waiting = []
+    @active = 0
+    @idle = null
+    @destroying = false
+    @requestTimeout = timeoutOption(configuration.requestTimeoutMs)
+    @startupTimeout = timeoutOption(configuration.startupTimeoutMs)
+    @shutdownTimeout = timeoutOption(configuration.shutdownTimeoutMs)
+    @observations = new WeakMap()
+    @auditEnabled = false
+    @pingEnabled = false
     workerFile = configuration.workerFile
     if workerFile == null
         resolver = nodeModule/createRequire(path.join(configuration.appRoot, "package.json"))
@@ -45,12 +66,21 @@ WorkerHost(configuration)
         throw "ApiWorkerEntryMustBeAbsolute"
     data = structuredClone({
         application: configuration.application
+        appRoot: configuration.appRoot
+        apiXml: configuration.apiXml
+        lifecycle: configuration.lifecycle
+        routeDefinitions: configuration.routeDefinitions
         stateFile: configuration.stateFile
         namespace: configuration.namespace
         maxForms: configuration.maxForms
         tokens: configuration.tokens
         options: configuration.options
     })
+    store = new SqliteStateStore(configuration.stateFile, {
+        namespace: configuration.namespace
+        maxForms: configuration.maxForms
+    })
+    store.close()
     pool = new piscina/Piscina({
         filename: workerFile
         name: "execute"
@@ -59,7 +89,7 @@ WorkerHost(configuration)
         maxQueue: @maxQueue
         concurrentTasksPerWorker: 1
         idleTimeout: 60000
-        closeTimeout: 30000
+        closeTimeout: @shutdownTimeout
         workerData: data
     })
     @pool = pool
@@ -83,10 +113,22 @@ positiveOption(value, fallback)
     return value
 
 WorkerHost:start()
-    ready = @pool.run({
-        ready: true
-    })
-    return ready.then(()
+    ready = []
+    for range(@threads) as index
+        ready.add(runBounded({
+            ready: true
+        }, @startupTimeout, "ApiWorkerStartupTimeout"))
+    return Promise/all(ready).then((workers)
+        if @stopping
+            throw "ApiWorkerHostClosing"
+        @auditEnabled = workers[0].auditEnabled
+        @pingEnabled = workers[0].pingEnabled
+        ids = []
+        for workers as worker
+            if !ids.includes(worker.threadId)
+                ids.add(worker.threadId)
+        if ids.length != @threads
+            throw "ApiWorkerInitializationIncomplete"
         listening = new Promise((resolve, reject)
             configuration = @configuration
             server = @server
@@ -112,9 +154,9 @@ WorkerHost:start()
 WorkerHost:receive(req, res)
     requestId = crypto/randomUUID()
     if @stopping
-        return httpFailure(res, 503, "ServiceUnavailable", requestId)
+        return failure(res, 503, "ServiceUnavailable", requestId)
     if req.method == "GET" and req.url == "/health"
-        return sendHttp(res, {
+        return write(res, {
             status: 200
             headers: {
                 "Content-Type": "application/json; charset=utf-8"
@@ -122,12 +164,15 @@ WorkerHost:receive(req, res)
             }
             body: to_json({
                 status: "ok"
+                queueSize: @waiting.length + @pool.queueSize
+                threads: @pool.threads.length
             })
         })
+    observe(req, res, requestId)
     if req.method != "POST"
-        return httpFailure(res, 405, "MethodNotAllowed", requestId)
+        return failure(res, 405, "MethodNotAllowed", requestId)
     if req.url.includes("?")
-        return httpFailure(res, 400, "QueryNotSupported", requestId)
+        return failure(res, 400, "QueryNotSupported", requestId)
     chunks = []
     size = 0
     limit = @bodyLimit
@@ -140,7 +185,7 @@ WorkerHost:receive(req, res)
         size = size + chunk.length
         if size > limit
             if !res.writableEnded
-                httpFailure(res, 413, "RequestTooLarge", requestId)
+                failure(res, 413, "RequestTooLarge", requestId)
           else
               chunks.add(chunk)
     )
@@ -159,13 +204,13 @@ WorkerHost:receive(req, res)
         capture res
         capture requestId
         if !res.writableEnded and !res.destroyed
-            httpFailure(res, 400, "BadRequest", requestId)
+            failure(res, 400, "BadRequest", requestId)
     )
     return null
 
 WorkerHost:submit(req, res, body, requestId)
-    if @stopping or @pool.queueSize >= @maxQueue
-        return httpFailure(res, 503, "ServiceUnavailable", requestId)
+    if @stopping or (@active >= @threads and @waiting.length >= @maxQueue)
+        return failure(res, 503, "ServiceUnavailable", requestId)
     task = {
         request: {
             id: requestId
@@ -176,21 +221,31 @@ WorkerHost:submit(req, res, body, requestId)
         }
         body: body
     }
-    pool = @pool
-    pool.run(task).then((result)
+    runBounded(task, @requestTimeout, "ApiWorkerTaskTimeout").then((result)
         capture res
         if !res.writableEnded and !res.destroyed
-            sendHttp(res, result)
+            write(res, result)
     ).catch((error)
         capture res
         capture requestId
+        context log
         if !res.writableEnded and !res.destroyed
             code = 500
             message = "InternalServerError"
+            if error == "ApiWorkerTaskTimeout"
+                code = 504
+                message = "GatewayTimeout"
+            if @stopping
+                code = 503
+                message = "ServiceUnavailable"
+            if error == "ApiWorkerQueueFull"
+                code = 503
+                message = "ServiceUnavailable"
             if error.message == "Task queue is at limit" or error.message == "No task queue available and all Workers are busy"
                 code = 503
                 message = "ServiceUnavailable"
-            httpFailure(res, code, message, requestId)
+            log.err("[${requestId}] Worker request failed: ${message}")
+            failure(res, code, message, requestId)
     )
     return null
 
@@ -210,23 +265,59 @@ WorkerHost:close()
               )
               server.close()
     )
-    closing = drained.then(()
+    forced = Promise/withResolvers()
+    expire = ()
+        capture forced
+        forceClose(forced)
+    timer = setTimeout(expire, @shutdownTimeout)
+    graceful = drained.then(()
         return stopPool()
     )
-    @closing = closing
+    @closing = finishClose(graceful, forced.promise, timer)
     return @closing
+
+finishClose(graceful, forced, timer)
+    return Promise/race([graceful, forced]).finally(()
+        capture timer
+        clearTimeout(timer)
+    )
+
+WorkerHost:forceClose(completed)
+    @destroying = true
+    for @waiting as task
+        task.completed.reject("ApiWorkerShutdownTimeout")
+    @waiting = []
+    @server.closeAllConnections()
+    @shutdown = @pool.destroy()
+    pending = @shutdown
+    pending.then(()
+        capture completed
+        completed.reject("ApiWorkerShutdownTimeout")
+    ).catch((error)
+        capture completed
+        completed.reject(error)
+    )
+    return null
 
 WorkerHost:stopPool()
     if @shutdown != null
         return @shutdown
     @stopping = true
-    pending = closePool(@pool)
+    pending = drainPool()
     @shutdown = pending
     pending.catch((error)
         context log
         log.err("Worker pool shutdown failed")
     )
     return pending
+
+WorkerHost:drainPool()
+    ready = Promise/resolve()
+    if @idle != null
+        ready = @idle.promise
+    return ready.then(()
+        return closePool(@pool)
+    )
 
 closePool(pool)
     return pool.close().catch((error)
@@ -237,13 +328,27 @@ closePool(pool)
         )
     )
 
-sendHttp(res, result)
+WorkerHost:write(res, result)
+    record = @observations.get(res)
+    if record != null
+        snapshot = result.audit
+        if snapshot != null
+            record.snapshot = snapshot
+          else
+              record.snapshot = {
+                  status: result.status
+                  input: null
+                  output: from_json(result.body)
+                  token: {
+                      auth: false
+                  }
+              }
     res.writeHead(result.status, result.headers)
     res.end(result.body)
     return null
 
-httpFailure(res, status, error, requestId)
-    return sendHttp(res, {
+WorkerHost:failure(res, status, error, requestId)
+    return write(res, {
         status: status
         headers: {
             "Content-Type": "application/json; charset=utf-8"
@@ -254,3 +359,129 @@ httpFailure(res, status, error, requestId)
             requestId: requestId
         })
     })
+
+WorkerHost:observe(req, res, requestId)
+    if !@auditEnabled or (@pingEnabled and req.url == "/_lango/ping")
+        return null
+    record = {
+        request: {
+            id: requestId
+            method: req.method
+            path: req.url
+            remoteAddress: req.socket.remoteAddress
+            headers: {
+                "content-type": req.headers["content-type"]
+                "user-agent": req.headers["user-agent"]
+            }
+        }
+        started: Date/now()
+        snapshot: null
+        finished: null
+    }
+    @observations.set(res, record)
+    res.once("finish", ()
+        capture record
+        if record.snapshot != null
+            record.finished = Date/now()
+            enqueueAudit(record)
+    )
+    res.once("close", ()
+        capture res
+        capture requestId
+        context log
+        if !res.writableFinished
+            log.warn("[${requestId}] Response did not finish")
+    )
+    return null
+
+WorkerHost:enqueueAudit(record)
+    context log
+    try
+        pending = runBounded({
+            audit: record
+        }, @requestTimeout, "ApiWorkerTaskTimeout")
+        pending.catch((error)
+            capture log
+            log.err("Request audit task failed")
+        )
+    catch error
+        log.err("Request audit task failed")
+    return null
+
+timeoutOption(value)
+    parsed = positiveOption(value, 30000)
+    if parsed > 2147483647
+        throw "ApiWorkerTimeoutLimit"
+    return parsed
+
+WorkerHost:runBounded(task, timeout, failure)
+    if @destroying
+        return Promise/reject("ApiWorkerShutdownTimeout")
+    if @active >= @threads and @waiting.length >= @maxQueue
+        return Promise/reject("ApiWorkerQueueFull")
+    record = {
+        task: task
+        completed: Promise/withResolvers()
+        controller: new AbortController()
+        started: false
+        expired: false
+        failure: failure
+    }
+    expire = ()
+        capture record
+        expireTask(record)
+    timer = setTimeout(expire, timeout)
+    if @idle == null
+        @idle = Promise/withResolvers()
+    @waiting.add(record)
+    pump()
+    completed = record.completed
+    return completed.promise.finally(()
+        capture timer
+        clearTimeout(timer)
+    )
+
+WorkerHost:expireTask(record)
+    record.expired = true
+    if record.started
+        controller = record.controller
+        controller.abort()
+      else
+          index = @waiting.indexOf(record)
+          if index >= 0
+              @waiting.splice(index, 1)
+          record.completed.reject(record.failure)
+          pump()
+    return null
+
+WorkerHost:pump()
+    loop while !@destroying and @active < @threads and @waiting.length > 0
+        record = @waiting.shift()
+        record.started = true
+        @active = @active + 1
+        controller = record.controller
+        pending = @pool.run(record.task, {
+            signal: controller.signal
+        })
+        settle(record, pending)
+    if @active == 0 and @waiting.length == 0 and @idle != null
+        completed = @idle
+        @idle = null
+        completed.resolve(null)
+    return null
+
+WorkerHost:settle(record, pending)
+    pending.then((result)
+        capture record
+        record.completed.resolve(result)
+    ).catch((error)
+        capture record
+        if record.expired
+            record.completed.reject(record.failure)
+          else
+              record.completed.reject(error)
+    ).finally(()
+        @active = @active - 1
+        pump()
+    )
+    return null

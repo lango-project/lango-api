@@ -1,0 +1,12 @@
+import js "node:fs" as fs
+
+export main(args)
+
+main(args)
+    manifest = from_json(fs.readFileSync("package.json", "utf8"))
+    if manifest.name != "@lango-project/lango-api"
+        throw "BuildMustRunFromPackageRoot"
+    fs.rmSync("dist", {
+        recursive: true
+        force: true
+    })

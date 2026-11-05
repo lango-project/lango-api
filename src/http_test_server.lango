@@ -1,0 +1,130 @@
+import js global process
+import js global setInterval
+import js global clearInterval
+import js "node:fs" as fs
+import js "node:buffer" as buffer
+import "./worker_host"
+    class WorkerHost
+import "./library"
+    class Host
+    class Routes
+import "./http_test_support"
+    writeTestResult(file, value)
+
+export main(args)
+
+class Server
+    methods
+        start()
+        startLibrary()
+        ready(server)
+        failed(error)
+        stop(server)
+        closeHost()
+
+Server(file, ready, exited)
+    @configuration = from_json(fs.readFileSync(file, "utf8"))
+    @readyFile = ready
+    @exited = exited
+    @stopFile = "${exited}.stop"
+    @timer = null
+    @host = null
+    @library = null
+    @closeError = null
+
+Server:start()
+    process.once("exit", (code)
+        threads = null
+        if @host != null
+            pool = @host.pool
+            threads = pool.threads.length
+        writeTestResult(@exited, {
+            code: code
+            threads: threads
+            error: @closeError
+        })
+    )
+    configuration = @configuration
+    if configuration.kind == "host"
+        return startLibrary()
+    tokens = configuration.tokens
+    if tokens != null
+        for tokens.keys as id: key
+            tokens.keys[id] = buffer/Buffer/from(key, "base64")
+    @host = new WorkerHost(configuration)
+    return @host.start().then((host)
+        return ready(host.server)
+    ).catch((error)
+        return failed(error)
+    )
+
+Server:startLibrary()
+    configuration = @configuration
+    @library = new Host(configuration.settings)
+    if configuration.routes != null
+        routes = new Routes()
+        for configuration.routes as endpoint
+            routes.endpoint(endpoint)
+        @library.routes(routes)
+    if configuration.events != null
+        for configuration.events as event
+            @library.on(event)
+    return @library.start().then((server)
+        return ready(server)
+    ).catch((error)
+        return failed(error)
+    )
+
+Server:ready(server)
+    process.once("SIGTERM", ()
+        capture server
+        stop(server)
+    )
+    poll = ()
+        capture server
+        capture fs
+        if fs.existsSync(@stopFile)
+            stop(server)
+    @timer = setInterval(poll, 10)
+    configuration = @configuration
+    if configuration.unboundedTask != null
+        pool = @host.pool
+        pool.run(configuration.unboundedTask).catch((error)
+            return null
+        )
+    address = server.address()
+    writeTestResult(@readyFile, {
+        url: "http://127.0.0.1:${address.port}"
+    })
+    return null
+
+Server:failed(error)
+    writeTestResult(@readyFile, {
+        failure: "${error}"
+    })
+    process.exitCode = 1
+    return null
+
+main(args)
+    server = new Server(args[0], args[1], args[2])
+    try
+        return server.start()
+    catch error
+        return server.failed(error)
+
+Server:stop(server)
+    clearInterval(@timer)
+    configuration = @configuration
+    if configuration.closeHost == true
+        closeHost()
+      else
+          server.close()
+    return null
+
+Server:closeHost()
+    pending = @host.close()
+    pending.catch((error)
+        @closeError = "${error}"
+        process.exitCode = 1
+    )
+    return null

@@ -1,0 +1,7 @@
+import js "node:fs" as fs
+
+export main(args)
+
+main(args)
+    fs.appendFileSync("build-count.txt", "build\n")
+    return null

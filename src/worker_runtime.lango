@@ -1,4 +1,5 @@
 import js "node:http" as http
+import js global Date
 import js "node:worker_threads" as threads
 import "./tokens"
     class SyncTokenService
@@ -6,6 +7,12 @@ import "./state"
     class SqliteStateStore
 import "./api_registry"
     findRoute(routes, requestPath)
+import "./ping"
+    processSyncPing(service, handler, input)
+import "./request_audit"
+    requestMetadata(request, snapshot, started)
+    auditRequest(request)
+    class CompletedResponse
 import "./synchronous"
     requireSync(value)
 
@@ -13,8 +20,10 @@ export class WorkerRuntime
     methods
         handle(task)
         dispatch(task, reply)
-        begin(raw, reply)
+        begin(raw)
         close()
+        definition()
+        activate()
 
 class WorkerResponse
     properties
@@ -30,6 +39,8 @@ class WorkerResponse
         logout()
         result()
         failure(code, error)
+        receiveInput(input)
+        snapshot()
 
 WorkerRuntime(configuration, factory)
     @store = new SqliteStateStore(configuration.stateFile, {
@@ -37,6 +48,8 @@ WorkerRuntime(configuration, factory)
         maxForms: configuration.maxForms
     })
     @closed = false
+    @cleanup = null
+    @definition = null
     try
         @tokens = null
         settings = configuration.tokens
@@ -47,26 +60,39 @@ WorkerRuntime(configuration, factory)
         definition = requireSync(factory(configuration.options))
         if !is_object(definition) or !is_array(definition.routes)
             throw "ApiWorkerRequiresRoutes"
-        @routes = definition.routes
-        @register = definition.register
-        @start = definition.start
-        @cleanup = definition.close
-        for [@register, @start, @cleanup] as hook
-            if hook != null
-                requireHook(hook)
-        for @routes as route
-            if @tokens != null
-                if route.path == "/_lango/start" or route.path == "/_lango/logout" or route.path == "/_lango/ping"
-                    throw "ApiWorkerReservedPath"
-            requireTarget(route)
-            if route.auth != null
-                requireHook(route.auth)
+        @definition = definition
+        if is_kindof(definition.close, Function)
+            @cleanup = definition.close
     catch error
         close()
         throw error
 
+WorkerRuntime:definition()
+    return @definition
+
+WorkerRuntime:activate()
+    definition = @definition
+    @routes = definition.routes
+    @register = definition.register
+    @start = definition.start
+    @cleanup = definition.close
+    @ping = definition.ping
+    @audit = definition.request
+    for [@register, @start, @cleanup, @ping, @audit] as hook
+        if hook != null
+            requireHook(hook)
+    for @routes as route
+        if @tokens != null
+            if route.path == "/_lango/start" or route.path == "/_lango/logout" or route.path == "/_lango/ping"
+                throw "ApiWorkerReservedPath"
+        requireTarget(route)
+        if route.auth != null
+            requireHook(route.auth)
+    return null
+
 WorkerRuntime:close()
     if !@closed
+        context state = @store
         @closed = true
         try
             if @cleanup != null
@@ -79,10 +105,14 @@ WorkerRuntime:handle(task)
     if task.ready == true
         return {
             threadId: threads.threadId
+            auditEnabled: @audit != null
+            pingEnabled: @tokens != null
         }
+    if task.audit != null
+        return observeCompleted(task.audit)
     context log
     context request = task.request
-    reply = new WorkerResponse(@tokens, request.id)
+    reply = new WorkerResponse(@tokens, request.id, @audit != null)
     context response = reply
     context token = {
         auth: false
@@ -95,15 +125,47 @@ WorkerRuntime:handle(task)
         if !reply.completed()
             reply.discardTokenChanges()
             reply.failure(500, "InternalServerError")
-    return reply.result()
+    result = reply.result()
+    if @audit != null and !isPing(request.path)
+        result.audit = reply.snapshot()
+    return result
 
-WorkerRuntime:begin(raw, reply)
+WorkerRuntime:isPing(path)
+    return @tokens != null and path == "/_lango/ping"
+
+WorkerRuntime:observeCompleted(record)
+    if @audit == null
+        return null
+    context log
+    context state = @store
+    context request = auditRequest(record.request)
+    snapshot = record.snapshot
+    context token = snapshot.token
+    context response = new CompletedResponse(snapshot.status, snapshot.output)
+    try
+        metadata = requestMetadata(request, snapshot, record.started)
+        metadata.durationMs = record.finished - record.started
+        timestamp = new Date(record.finished)
+        metadata.timestamp = timestamp.toISOString()
+        invokeHook(@audit, metadata)
+    catch error
+        log.err("[${request.id}] Request audit callback failed")
+    return null
+
+WorkerRuntime:invokePing(metadata)
+    if @ping != null
+        return invokeHook(@ping, metadata)
+    return null
+
+WorkerRuntime:begin(raw)
     context request
     session = @tokens.startSession(raw)
     claims = session.claims
     context token = claims
-    reply.bindToken(claims)
+    timestamp = new Date()
     metadata = {
+        timestamp: timestamp.toISOString()
+        queryString: ""
         clientId: claims.clientId
         sessionId: claims.sessionId
         sessionStartedAt: claims.sessionStartedAt
@@ -113,11 +175,11 @@ WorkerRuntime:begin(raw, reply)
         url: request.path
     }
     if session.registered and @register != null
-        invokeHook(@register, metadata)
-        reply.restoreIdentity()
+        invokeHook(@register, from_json(to_json(metadata)))
+        restoreSessionIdentity(claims, metadata)
     if @start != null
-        invokeHook(@start, metadata)
-        reply.restoreIdentity()
+        invokeHook(@start, from_json(to_json(metadata)))
+        restoreSessionIdentity(claims, metadata)
     return claims
 
 WorkerRuntime:dispatch(task, reply)
@@ -125,13 +187,19 @@ WorkerRuntime:dispatch(task, reply)
     route = findRoute(@routes, request.path)
     bootstrap = @tokens != null and request.path == "/_lango/start"
     logout = @tokens != null and request.path == "/_lango/logout"
-    if route == null and !bootstrap and !logout
+    pingRequest = isPing(request.path)
+    if route == null and !bootstrap and !logout and !pingRequest
         return reply.failure(404, "RouteNotFound")
     input = null
     try
         input = from_json(task.body)
     catch error
         return reply.failure(400, "BadRequest")
+    reply.receiveInput(input)
+    if pingRequest
+        handler = (metadata)
+            return invokePing(metadata)
+        return processSyncPing(@tokens, handler, input)
     claims = {
         auth: false
     }
@@ -143,12 +211,12 @@ WorkerRuntime:dispatch(task, reply)
             return reply.failure(401, "Unauthorized")
         claims = null
         if bootstrap
-            claims = begin(raw, reply)
+            claims = begin(raw)
           else
               if raw == null
                   if logout or route.anonymous != true
                       return reply.failure(401, "Unauthorized")
-                  claims = begin(null, reply)
+                  claims = begin(null)
                 else
                     try
                         claims = @tokens.verify(raw)
@@ -182,6 +250,13 @@ WorkerRuntime:dispatch(task, reply)
     result = invokeTarget(route, input)
     if !reply.completed()
         reply.send(result)
+    return null
+
+restoreSessionIdentity(claims, metadata)
+    claims.clientId = metadata.clientId
+    claims.sessionId = metadata.sessionId
+    claims.sessionStartedAt = metadata.sessionStartedAt
+    claims.sessionExpiresAt = metadata.sessionExpiresAt
     return null
 
 requireTarget(route)
@@ -234,7 +309,8 @@ bearer(authorization)
         throw "ApiInvalidToken"
     return authorization.slice(7)
 
-WorkerResponse(service, requestId)
+WorkerResponse(service, requestId, auditEnabled = false)
+    @auditEnabled = auditEnabled
     @service = service
     @requestId = requestId
     @statusCode = 200
@@ -246,6 +322,7 @@ WorkerResponse(service, requestId)
     @original = null
     @loggedOut = false
     @sentClaims = null
+    @input = null
 
 WorkerResponse:status(code)
     if @completed
@@ -344,4 +421,22 @@ WorkerResponse:result()
         status: @statusCode
         headers: @headers
         body: @body
+    }
+
+WorkerResponse:receiveInput(input)
+    if @auditEnabled
+        @input = from_json(to_json(input))
+    return null
+
+WorkerResponse:snapshot()
+    claims = @sentClaims
+    if claims == null
+        claims = {
+            auth: false
+        }
+    return {
+        status: @statusCode
+        input: @input
+        output: from_json(@body)
+        token: from_json(to_json(claims))
     }

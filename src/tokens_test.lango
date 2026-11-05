@@ -1,232 +1,132 @@
-import js global Promise
 import js global Uint8Array
+import js global Date
+import js global Math
 import js "node:crypto" as crypto
+import js "node:buffer" as buffer
+import js "jsonwebtoken" as jwt
 import js "jose" as jose
 import "./tokens"
     class TokenService
-
 
 export main(args)
 
 configuration(key)
     return {
         issuer: "lango-test"
-        audience: "lango-api-test"
+        audience: "browser"
         activeKeyId: "current"
         keys: {
             current: key
         }
-        ttlSeconds: 900
     }
 
+invalid(service, raw)
+    rejected = false
+    try
+        service.verify(raw)
+    catch error
+        assert error == "ApiInvalidToken"
+        rejected = true
+    assert rejected
+    return null
+
+raw(key, claims, algorithm = "HS256", typ = "lango+jwt", id = "current")
+    return jwt/default/sign(claims, buffer/Buffer/from(key), {
+        algorithm: algorithm
+        header: {
+            typ: typ
+            kid: id
+        }
+    })
+
 main(args)
-    key = crypto/randomBytes(32)
-    options = configuration(key)
-    service = new TokenService(options)
-    verificationKey = new Uint8Array(key)
+    key = crypto/randomBytes(64)
+    saved = new Uint8Array(key)
+    service = new TokenService(configuration(key))
     key.fill(0)
-    return service.sign({
+    signed = service.sign({
         auth: true
         userId: "ada"
         iss: "untrusted"
         aud: "untrusted"
         exp: 1
-    }).then((token)
-        capture service
-        capture verificationKey
-        return checkRoundTrip(service, token, verificationKey)
-    )
-
-checkRoundTrip(service, token, key)
-    return service.verify(token).then((claims)
-        capture service
-        capture token
-        capture key
-        assert claims.auth
-        assert claims.userId == "ada"
-        assert claims.iss == "lango-test"
-        assert claims.aud == "lango-api-test"
-        assert claims.exp > claims.iat
-        return checkInvalid(service, token, key)
-    )
-
-checkInvalid(service, token, key)
-    wrongAudience = configuration(key)
-    wrongAudience.audience = "another-service"
-    other = new TokenService(wrongAudience)
-    checks = [expectInvalid(service, "not-a-token"), expectInvalid(service, "${token}x"), expectInvalid(other, token), checkExpired(service, key)]
-    return Promise/all(checks).then((results)
-        println("PASS token round-trip, reserved claims, key isolation and invalid-token rejection")
-        return checkRotation()
-    )
-
-expectInvalid(service, token)
-    return service.verify(token).then((claims)
-        throw "UnexpectedTokenAcceptance"
-    ).catch((error)
-        assert error == "ApiInvalidToken"
-    )
-
-checkRotation()
-    oldKey = crypto/randomBytes(32)
-    oldOptions = configuration(oldKey)
-    oldOptions.activeKeyId = "previous"
-    oldOptions.keys = {
-        previous: oldKey
+    })
+    claims = service.verify(signed)
+    assert claims.auth
+    assert claims.userId == "ada"
+    assert claims.iss == "lango-test"
+    assert claims.aud == "browser"
+    assert claims.exp > claims.iat
+    invalid(service, "not-a-token")
+    invalid(service, "${signed}x")
+    other = configuration(saved)
+    other.audience = "wrong"
+    invalid(new TokenService(other), signed)
+    invalid(new TokenService(configuration(crypto/randomBytes(64))), signed)
+    for ["HS384", "HS512"] as algorithm
+        invalid(service, raw(saved, claims, algorithm))
+    invalid(service, raw(saved, claims, "HS256", "JWT"))
+    invalid(service, raw(saved, claims, "HS256", "lango+jwt", "unknown"))
+    println("PASS synchronous token round-trip, reserved claims, key isolation, audience and header policy")
+    previous = configuration(saved)
+    previous.activeKeyId = "previous"
+    previous.keys = {
+        previous: saved
     }
-    old = new TokenService(oldOptions)
-    rotatedOptions = configuration(crypto/randomBytes(32))
-    rotatedOptions.keys.previous = oldKey
-    rotated = new TokenService(rotatedOptions)
-    dropped = new TokenService(configuration(crypto/randomBytes(32)))
-    return old.sign({
+    old = new TokenService(previous)
+    rotated = configuration(crypto/randomBytes(32))
+    rotated.keys.previous = saved
+    retained = new TokenService(rotated)
+    oldToken = old.sign({
         auth: false
-    }).then((token)
-        capture rotated
-        capture dropped
-        return verifyRotated(rotated, dropped, token)
-    ).then((result)
-        println("PASS retained rotation keys verify and removed key ids are rejected")
-        return checkPolicy()
-    )
-
-checkPolicy()
-    key = crypto/randomBytes(64)
-    service = new TokenService(configuration(key))
-    return Promise/all([wrongHeader(service, key, "HS384", "lango+jwt"), wrongHeader(service, key, "HS256", "other+jwt")]).then((results)
-        println("PASS algorithm and token type are pinned")
-        return checkExpiredIdentity()
-    )
-
-checkExpiredIdentity()
-    key = crypto/randomBytes(32)
-    service = new TokenService(configuration(key))
-    signer = new jose/SignJWT({
-        auth: true
-        clientId: "stable-client"
-        privateForm: "must-not-survive"
     })
-    signer.setProtectedHeader({
-        alg: "HS256"
-        typ: "lango+jwt"
-        kid: "current"
-    })
-    signer.setIssuer("lango-test")
-    signer.setAudience("lango-api-test")
-    signer.setIssuedAt(1)
-    signer.setExpirationTime(2)
-    signer.setJti("expired-identity")
-    return signer.sign(key).then((token)
+    assert !retained.verify(oldToken).auth
+    invalid(service, oldToken)
+    println("PASS retained rotation keys verify and removed key ids are rejected")
+    expired = from_json(to_json(claims))
+    expired.iat = 1
+    expired.exp = 2
+    expired.privateForm = "must-not-survive"
+    expiredToken = raw(saved, expired)
+    invalid(service, expiredToken)
+    session = service.startSession(expiredToken)
+    assert !session.registered
+    assert session.claims.clientId == claims.clientId
+    assert !session.claims.auth
+    restarted = session.claims
+    assert restarted.privateForm == null
+    assert restarted.sessionId != claims.sessionId
+    first = service.startSession(signed)
+    second = service.startSession(signed)
+    assert first.claims.clientId == second.claims.clientId
+    assert first.claims.sessionId != second.claims.sessionId
+    assert !first.claims.auth
+    assert service.verify(signed).auth
+    anonymous = service.startSession(null)
+    another = service.startSession(null)
+    assert anonymous.registered
+    assert anonymous.claims.clientId != another.claims.clientId
+    assert anonymous.claims.sessionId != another.claims.sessionId
+    println("PASS expired signatures recover only client identity; sessions, auth and form claims start fresh")
+    return interoperability(service, signed, saved)
+
+interoperability(service, signed, key)
+    return jose/jwtVerify(signed, key, {
+        algorithms: ["HS256"]
+        issuer: "lango-test"
+        audience: "browser"
+    }).then((verified)
+        capture key
+        assert verified.payload.userId == "ada"
+        signer = new jose/SignJWT(verified.payload)
+        signer.setProtectedHeader({
+            alg: "HS256"
+            typ: "lango+jwt"
+            kid: "current"
+        })
+        return signer.sign(key)
+    ).then((raw)
         capture service
-        return restartExpired(service, token)
-    )
-
-restartExpired(service, token)
-    return service.restart(token).then((claims)
-        capture service
-        capture token
-        assert claims.clientId == "stable-client"
-        assert !claims.auth
-        assertFormCleared(claims)
-        println("PASS expired signed tokens recover only client identity, never auth or form claims")
-        return classifyExpired(service, token)
-    )
-
-classifyExpired(service, token)
-    return service.startSession(token).then((session)
-        capture service
-        assert !session.registered
-        assert session.claims.clientId == "stable-client"
-        assert !session.claims.auth
-        println("PASS expired identity recovery does not register the client again")
-        return checkSessionIsolation(service)
-    )
-
-checkSessionIsolation(service)
-    return service.sign({
-        auth: true
-        clientId: "browser-client"
-    }).then((token)
-        capture service
-        return checkTabSessions(service, token)
-    )
-
-checkTabSessions(service, token)
-    return Promise/all([service.startSession(token), service.startSession(token)]).then((sessions)
-        capture service
-        capture token
-        first = sessions[0].claims
-        second = sessions[1].claims
-        assert first.clientId == "browser-client"
-        assert second.clientId == first.clientId
-        assert first.sessionId != second.sessionId
-        assert !first.auth
-        assert !second.auth
-        return service.verify(token)
-    ).then((claims)
-        capture service
-        assert claims.auth
-        assert claims.clientId == "browser-client"
-        return checkNewClients(service)
-    )
-
-checkNewClients(service)
-    return Promise/all([service.startSession(null), service.startSession(null)]).then((sessions)
-        first = sessions[0].claims
-        second = sessions[1].claims
-        assert first.clientId != second.clientId
-        assert first.sessionId != second.sessionId
-        assert !first.auth
-        assert !second.auth
-        println("PASS tabs recover only shared client identity into independent anonymous sessions; unseeded clients receive independent identities")
-    )
-
-assertFormCleared(claims)
-    assert claims.privateForm == null
-    return null
-
-wrongHeader(service, key, algorithm, type)
-    signer = new jose/SignJWT({
-        auth: true
-    })
-    signer.setProtectedHeader({
-        alg: algorithm
-        typ: type
-        kid: "current"
-    })
-    signer.setIssuer("lango-test")
-    signer.setAudience("lango-api-test")
-    signer.setIssuedAt()
-    signer.setExpirationTime("5m")
-    signer.setJti("header-policy-test")
-    return signer.sign(key).then((token)
-        capture service
-        return expectInvalid(service, token)
-    )
-
-verifyRotated(rotated, dropped, token)
-    return rotated.verify(token).then((claims)
-        capture dropped
-        capture token
-        assert !claims.auth
-        return expectInvalid(dropped, token)
-    )
-
-checkExpired(service, key)
-    signer = new jose/SignJWT({
-        auth: true
-    })
-    signer.setProtectedHeader({
-        alg: "HS256"
-        typ: "lango+jwt"
-        kid: "current"
-    })
-    signer.setIssuer("lango-test")
-    signer.setAudience("lango-api-test")
-    signer.setIssuedAt(1)
-    signer.setExpirationTime(2)
-    signer.setJti("expired-test")
-    return signer.sign(key).then((token)
-        capture service
-        return expectInvalid(service, token)
+        assert service.verify(raw).userId == "ada"
+        println("PASS synchronous JWTs verify jose signatures and jose verifies their signatures")
     )

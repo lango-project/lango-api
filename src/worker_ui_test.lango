@@ -1,0 +1,172 @@
+import js global Promise
+import js global fetch
+import js "node:fs" as fs
+import js "node:path" as path
+import js "node:os" as os
+import js "node:crypto" as crypto
+import "./library"
+    class Host
+
+export main(args)
+
+class Harness
+    methods
+        start()
+        request(instance)
+        loaded()
+        failures()
+        stop()
+
+Harness()
+    @directory = fs.mkdtempSync(path.join(os.tmpdir(), "lango-worker-ui-"))
+    @uiFile = path.join(@directory, "ui.xml")
+    @packageRoot = path.join(@directory, "package")
+    @link = path.join(@directory, "node_modules", "@test", "ui")
+    @host = null
+    @url = null
+    fs.mkdirSync(@packageRoot)
+    fs.mkdirSync(path.dirname(@link), {
+        recursive: true
+    })
+    fs.writeFileSync(path.join(@directory, "package.json"), "{}")
+    fs.writeFileSync(path.join(@packageRoot, "package.json"), to_json({
+        type: "module"
+        exports: "./handler.mjs"
+    }))
+    fs.symlinkSync(path.resolve(".test-output/worker_ui_fixture.mjs"), path.join(@packageRoot, "handler.mjs"))
+    fs.symlinkSync(@packageRoot, @link, "junction")
+    fs.symlinkSync(path.resolve(".test-output/.lango"), path.join(@packageRoot, ".lango"), "junction")
+    key = crypto/randomBytes(32)
+    fs.writeFileSync(path.join(@directory, "keys.json"), to_json({
+        current: key.toString("base64")
+    }))
+    xml = <ui><event path="/app/save" mod="@test/ui" func="save" /></ui>
+    fs.writeFileSync(@uiFile, xml)
+    @host = new Host({
+        applicationName: "worker-ui"
+        appRoot: @directory
+        stateDir: path.join(@directory, "state")
+        mode: "server"
+        host: "127.0.0.1"
+        port: 0
+        workers: {
+            application: path.resolve(".test-output/worker_ui_app.mjs")
+            workerFile: path.resolve(".test-output/worker_entry.mjs")
+            threads: 2
+            options: {
+                appRoot: @directory
+                uiFile: @uiFile
+            }
+        }
+        jwt: {
+            issuer: "worker-ui"
+            audience: "browser"
+            activeKeyId: "current"
+            keysFile: path.join(@directory, "keys.json")
+        }
+    })
+
+Harness:start()
+    return @host.start().then((server)
+        address = server.address()
+        @url = "http://127.0.0.1:${address.port}"
+    )
+
+Harness:request(instance)
+    return fetch("${@url}/app/save", {
+        method: "POST"
+        headers: {
+            "Content-Type": "application/json"
+        }
+        body: to_json({
+            formId: "profile"
+            formInstanceId: instance
+            seqno: 1
+            values: {
+                email: "hello@example.com"
+                saveButton: null
+            }
+        })
+    }).then((res)
+        return decoded(res)
+    )
+
+decoded(res)
+    return res.json().then((body)
+        capture res
+        return {
+            status: res.status
+            thread: res.headers.get("x-worker-thread")
+            token: res.headers.get("x-lango-token")
+            body: body
+        }
+    )
+
+Harness:loaded()
+    fs.unlinkSync(@uiFile)
+    fs.unlinkSync(@link)
+    fs.unlinkSync(path.join(@packageRoot, "handler.mjs"))
+    return Promise/all([request("first"), request("second")]).then((results)
+        for results as result
+            assert result.status == 200
+            assert is_string(result.token)
+            assert result.body.vals.email == "Saved: hello@example.com"
+            assert result.body.cmds[0].name == "enabled"
+            assert result.body.cmds[0].value == false
+        assert results[0].thread != results[1].thread
+        assert results[0].body.vals.moduleId != results[1].body.vals.moduleId
+        println("PASS both workers preload ui.xml package exports before listening and keep synchronous form/context handlers after XML and package removal")
+        return @host.close()
+    )
+
+Harness:failures()
+    xml = <ui><event path="/app/save" mod="@test/missing" func="save" /></ui>
+    fs.writeFileSync(@uiFile, xml)
+    return failedStart(@host, "Cannot find module").then(()
+        capture fs
+        capture path
+        fs.symlinkSync(path.resolve(".test-output/worker_ui_fixture.mjs"), path.join(@packageRoot, "handler.mjs"))
+        fs.symlinkSync(@packageRoot, @link, "junction")
+        xml = <ui><event path="/app/save" mod="@test/ui" func="missing" /></ui>
+        fs.writeFileSync(@uiFile, xml)
+        return failedStart(@host, "UiHandlerNotExported")
+    ).then(()
+        println("PASS UI module/export errors reject worker startup before HTTP listening")
+    )
+
+failedStart(host, expected)
+    return host.start().then((server)
+        throw "UnexpectedStartupSuccess"
+    ).catch((error)
+        capture expected
+        message = "${error}"
+        assert message.includes(expected)
+    ).finally(()
+        capture host
+        return host.close()
+    )
+
+Harness:stop()
+    return @host.close().finally(()
+        removeDirectory(@directory)
+    )
+
+removeDirectory(directory)
+    fs.rmSync(directory, {
+        recursive: true
+        force: true
+    })
+    return null
+
+main(args)
+    harness = new Harness()
+    return harness.start().then(()
+        capture harness
+        return harness.loaded()
+    ).then(()
+        capture harness
+        return harness.failures()
+    ).finally(()
+        capture harness
+        return harness.stop()
+    )

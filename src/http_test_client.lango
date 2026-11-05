@@ -1,0 +1,40 @@
+import js global fetch
+import js global AbortSignal
+import js global process
+import js "node:fs" as fs
+
+import "./http_test_support"
+    writeTestResult(file, value)
+
+export main(args)
+
+main(args)
+    input = from_json(fs.readFileSync(args[0], "utf8"))
+    output = args[1]
+    options = input.options
+    options.signal = AbortSignal/timeout(10000)
+    return fetch(input.url, options).then((res)
+        return decoded(res)
+    ).then((result)
+        capture output
+        writeTestResult(output, result)
+    ).catch((error)
+        capture output
+        writeTestResult(output, {
+            failure: "${error}"
+        })
+        process.exitCode = 1
+    )
+
+decoded(res)
+    return res.json().then((body)
+        capture res
+        return {
+            status: res.status
+            body: body
+            token: res.headers.get("x-lango-token")
+            thread: res.headers.get("x-worker-thread")
+            authenticate: res.headers.get("www-authenticate")
+            cache: res.headers.get("cache-control")
+        }
+    )
