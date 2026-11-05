@@ -15,7 +15,9 @@
     "./tokens": "./dist/tokens.mjs",
     "./state": "./dist/state.mjs",
     "./workers": "./dist/worker_host.mjs",
-    "./worker-entry": "./dist/worker_entry.mjs"
+    "./worker-entry": "./dist/worker_entry.mjs",
+    "./http-input": "./dist/http_input.mjs",
+    "./rate-limit": "./dist/rate_limit.mjs"
   },
   "lango": {
     "source": "src/cli.lango",
@@ -36,7 +38,7 @@
   ],
   "scripts": {
     "build": "lango build src/cli.lango --out dist/cli.mjs --executable && lango build src/tokens.lango --out dist/tokens.mjs && lango build src/worker_host.lango --out dist/worker_host.mjs && lango build src/worker_entry.lango --out dist/worker_entry.mjs",
-    "test": "lango test src/cli.lango --build-dir .test-output/source && npm run test:tokens && npm run test:runtime && npm run test:state && npm run test:worker-host && npm run test:resilience",
+    "test": "lango test src/cli.lango --build-dir .test-output/source && npm run test:tokens && npm run test:runtime && npm run test:state && npm run test:worker-host && npm run test:resilience && npm run test:input && npm run test:security",
     "test:tokens": "lango build src/tokens_test.lango --out .test-output/tokens_test.mjs --executable && node .test-output/tokens_test.mjs && lango build src/session_lifetime_test.lango --out .test-output/session_lifetime_test.mjs --executable && node .test-output/session_lifetime_test.mjs && lango build src/sync_tokens_test.lango --out .test-output/sync_tokens_test.mjs --executable && node .test-output/sync_tokens_test.mjs",
     "test:state": "lango build src/state_test.lango --out .test-output/state_test.mjs --executable && node .test-output/state_test.mjs",
     "test:workers": "npm run build && npm run test:http-support && lango build ../lango-ui/src/library.lango --out ../lango-ui/dist/library.mjs && lango build src/worker_fixture.lango --out .test-output/worker_fixture.mjs && lango build src/worker_http_test.lango --out .test-output/worker_http_test.mjs --executable && node .test-output/worker_http_test.mjs && npm run test:worker-ui",
@@ -49,7 +51,9 @@
     "prebuild": "lango run tools/clean.lango",
     "test:http-support": "lango build src/http_test_server.lango --out .test-output/http_test_server.mjs --executable && lango build src/http_test_client.lango --out .test-output/http_test_client.mjs --executable",
     "test:resilience": "npm run test:http-support && lango build src/worker_entry.lango --out .test-output/worker_entry.mjs && lango build src/resilience_fixture.lango --out .test-output/resilience_fixture.mjs && lango build src/resilience_test.lango --out .test-output/resilience_test.mjs --executable && node .test-output/resilience_test.mjs",
-    "bench:workers": "npm run test:http-support && lango build src/worker_entry.lango --out .test-output/worker_entry.mjs && lango build src/load_fixture.lango --out .test-output/load_fixture.mjs && lango build src/load_client.lango --out .test-output/load_client.mjs --executable && lango build src/load_workers.lango --out .test-output/load_workers.mjs --executable && node .test-output/load_workers.mjs"
+    "bench:workers": "npm run test:http-support && lango build src/worker_entry.lango --out .test-output/worker_entry.mjs && lango build src/load_fixture.lango --out .test-output/load_fixture.mjs && lango build src/load_client.lango --out .test-output/load_client.mjs --executable && lango build src/load_workers.lango --out .test-output/load_workers.mjs --executable && node .test-output/load_workers.mjs",
+    "test:input": "lango build src/http_input_test.lango --out .test-output/http_input_test.mjs --executable && node .test-output/http_input_test.mjs",
+    "test:security": "npm run test:http-support && lango build src/worker_entry.lango --out .test-output/worker_entry.mjs && lango build src/security_fixture.lango --out .test-output/security_fixture.mjs && lango build src/security_test.lango --out .test-output/security_test.mjs --executable && node .test-output/security_test.mjs"
   },
   "devDependencies": {
     "@lango-project/lango-js": "^0.1.8",

@@ -1,0 +1,79 @@
+import js "node:crypto" as crypto
+import "./http_input"
+    readRequestBody(req, res, options, complete, failure)
+    rejectHttpRequest(req, res, status, error, retry, requestId)
+import "./rate_limit"
+    class RateLimiter
+
+export class ClientErrorSink
+    methods
+        receive(req, res)
+
+ClientErrorSink()
+    @clients = new RateLimiter({
+        rateLimit: 10
+    })
+    @total = new RateLimiter({
+        rateLimit: 1000
+        rateMaxClients: 1
+    })
+
+ClientErrorSink:receive(req, res)
+    retry = @clients.admit(req.socket.remoteAddress)
+    if retry == 0
+        retry = @total.admit("all")
+    if retry > 0
+        return rejectHttpRequest(req, res, 429, "TooManyRequests", retry, null)
+    complete = (body)
+        capture res
+        accept(res, body)
+    failure = (status, error)
+        capture res
+        reply(res, status, error)
+    readRequestBody(req, res, {
+        bodyLimit: 2048
+        bodyTimeoutMs: 3000
+    }, complete, failure)
+    return null
+
+ClientErrorSink:accept(res, body)
+    context log
+    report = null
+    try
+        report = from_json(body)
+    catch error
+        return reply(res, 400, "ClientReportInvalid")
+    if !is_object(report) or is_array(report)
+        return reply(res, 400, "ClientReportInvalid")
+    fields = ["version", "source", "code", "count"]
+    for report as name: value
+        if !fields.includes(name)
+            return reply(res, 400, "ClientReportInvalid")
+    sources = ["window", "promise", "ui"]
+    codes = ["UnexpectedError", "UiProtocolUnsupported", "UiHttpError"]
+    if report.version != 1 or !sources.includes(report.source)
+        return reply(res, 400, "ClientReportInvalid")
+    if !codes.includes(report.code)
+        return reply(res, 400, "ClientReportInvalid")
+    if !is_number(report.count) or report.count < 1 or report.count > 100 or report.count % 1 != 0
+        return reply(res, 400, "ClientReportInvalid")
+    hash = crypto/createHash("sha256")
+    hash.update("${report.source}:${report.code}")
+    fingerprint = hash.digest("hex")
+    log.warn("Client error ${fingerprint}: source=${report.source} code=${report.code} count=${report.count}")
+    return reply(res, 202, null)
+
+ClientErrorSink:reply(res, status, error)
+    body = {
+        accepted: true
+    }
+    if error != null
+        body = {
+            error: error
+        }
+    res.writeHead(status, {
+        "Content-Type": "application/json; charset=utf-8"
+        "Cache-Control": "no-store"
+    })
+    res.end(to_json(body))
+    return null

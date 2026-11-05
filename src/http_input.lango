@@ -1,0 +1,162 @@
+import js global Buffer
+import js global Number
+import js global setTimeout
+import js global clearTimeout
+
+export requestBodyOptions(options)
+export readRequestBody(req, res, options, complete, failure)
+export rejectHttpRequest(req, res, status, error, retry, requestId)
+
+rejectHttpRequest(req, res, status, error, retry, requestId)
+    req.on("error", (error)
+        return null
+    )
+    req.pause()
+    res.setHeader("Connection", "close")
+    if retry != null
+        res.setHeader("Retry-After", "${retry}")
+    res.once("finish", ()
+        capture req
+        req.destroy()
+    )
+    body = {
+        error: error
+    }
+    if requestId != null
+        body.requestId = requestId
+    res.writeHead(status, {
+        "Content-Type": "application/json; charset=utf-8"
+        "Cache-Control": "no-store"
+    })
+    res.end(to_json(body))
+    return null
+
+requestBodyOptions(options)
+    limit = options.bodyLimit
+    timeout = options.bodyTimeoutMs
+    if limit == null
+        limit = 1048576
+    if timeout == null
+        timeout = 30000
+    if !is_number(limit) or limit < 1 or limit > 9007199254740991 or limit % 1 != 0
+        throw "ApiBodyLimitMustBePositiveInteger"
+    if !is_number(timeout) or timeout < 1 or timeout > 2147483647 or timeout % 1 != 0
+        throw "ApiBodyTimeoutMustBePositiveInteger"
+    return {
+        bodyLimit: limit
+        bodyTimeoutMs: timeout
+    }
+
+readRequestBody(req, res, options, complete, failure)
+    reader = new BodyReader(req, res, options, complete, failure)
+    reader.start()
+    return null
+
+class BodyReader
+    methods
+        start()
+
+BodyReader(req, res, options, complete, failure)
+    @req = req
+    @res = res
+    @options = options
+    @complete = complete
+    @failure = failure
+    @chunks = []
+    @size = 0
+    @done = false
+    @timer = null
+    data = (chunk)
+        accept(chunk)
+    ended = ()
+        finish()
+    failed = (error)
+        reject(400, "BadRequest")
+    aborted = ()
+        abandon()
+    closed = ()
+        abandon()
+    @data = data
+    @ended = ended
+    @failed = failed
+    @aborted = aborted
+    @closed = closed
+
+BodyReader:start()
+    req = @req
+    res = @res
+    if req.aborted or res.destroyed
+        abandon()
+        return null
+    req.on("error", @failed)
+    req.on("aborted", @aborted)
+    res.on("close", @closed)
+    length = req.headers["content-length"]
+    options = @options
+    if is_string(length) and Number/parseInt(length, 10) > options.bodyLimit
+        reject(413, "RequestTooLarge")
+        return null
+    expired = ()
+        reject(408, "RequestTimeout")
+    @timer = setTimeout(expired, options.bodyTimeoutMs)
+    req.on("data", @data)
+    req.on("end", @ended)
+    return null
+
+BodyReader:accept(chunk)
+    if @done
+        return null
+    @size = @size + chunk.length
+    options = @options
+    if @size > options.bodyLimit
+        reject(413, "RequestTooLarge")
+      else
+          @chunks.add(chunk)
+    return null
+
+BodyReader:finish()
+    if @done
+        return null
+    @done = true
+    body = Buffer/concat(@chunks).toString("utf8")
+    cleanup()
+    @chunks = []
+    callback = @complete
+    callback(body)
+    return null
+
+BodyReader:abandon()
+    if @done
+        return null
+    @done = true
+    cleanup()
+    @chunks = []
+    return null
+
+BodyReader:reject(status, error)
+    if @done
+        return null
+    @done = true
+    cleanup()
+    @chunks = []
+    req = @req
+    res = @res
+    req.pause()
+    if !res.writableEnded and !res.destroyed
+        res.setHeader("Connection", "close")
+        res.once("finish", ()
+            capture req
+            req.destroy()
+        )
+        callback = @failure
+        callback(status, error)
+    return null
+
+BodyReader:cleanup()
+    clearTimeout(@timer)
+    req = @req
+    req.removeListener("data", @data)
+    req.removeListener("end", @ended)
+    req.removeListener("aborted", @aborted)
+    @res.removeListener("close", @closed)
+    return null

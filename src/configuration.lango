@@ -162,6 +162,10 @@ applyEnvironmentConfiguration(configuration, environment)
         LANGO_WORKER_THREADS: "threads"
         LANGO_WORKER_MAX_QUEUE: "maxQueue"
         LANGO_WORKER_BODY_LIMIT: "bodyLimit"
+        LANGO_WORKER_BODY_TIMEOUT: "bodyTimeoutMs"
+        LANGO_WORKER_RATE_LIMIT: "rateLimit"
+        LANGO_WORKER_RATE_WINDOW: "rateWindowMs"
+        LANGO_WORKER_RATE_MAX_CLIENTS: "rateMaxClients"
         LANGO_WORKER_TIMEOUT: "requestTimeoutMs"
         LANGO_WORKER_STARTUP_TIMEOUT: "startupTimeoutMs"
         LANGO_WORKER_SHUTDOWN_TIMEOUT: "shutdownTimeoutMs"
@@ -215,6 +219,10 @@ applyOptionConfiguration(configuration, options)
         workerThreads: "threads"
         workerMaxQueue: "maxQueue"
         workerBodyLimit: "bodyLimit"
+        workerBodyTimeout: "bodyTimeoutMs"
+        workerRateLimit: "rateLimit"
+        workerRateWindow: "rateWindowMs"
+        workerRateMaxClients: "rateMaxClients"
         workerTimeout: "requestTimeoutMs"
         workerStartupTimeout: "startupTimeoutMs"
         workerShutdownTimeout: "shutdownTimeoutMs"
@@ -351,11 +359,18 @@ workerInteger(value, name)
         parsed = to_js_number($(value))
     catch error
         throw "ApiWorkerInvalidInteger: ${name}"
-    if parsed < 1 or parsed > 9007199254740991 or parsed % 1 != 0
+    minimum = 1
+    if name == "rateLimit"
+        minimum = 0
+    if parsed < minimum or parsed > 9007199254740991 or parsed % 1 != 0
         throw "ApiWorkerInvalidInteger: ${name}"
+    if name == "rateLimit" and parsed > 1000000000
+        throw "ApiRateLimitInvalidInteger"
+    if name == "rateMaxClients" and parsed > 1000000
+        throw "ApiRateLimitInvalidInteger"
     if name == "threads" and parsed > 128
         throw "ApiWorkerThreadLimit"
-    if name == "requestTimeoutMs" or name == "startupTimeoutMs" or name == "shutdownTimeoutMs"
+    if name == "rateWindowMs" or name == "bodyTimeoutMs" or name == "requestTimeoutMs" or name == "startupTimeoutMs" or name == "shutdownTimeoutMs"
         if parsed > 2147483647
             throw "ApiWorkerTimeoutLimit"
     return parsed
@@ -375,6 +390,10 @@ setWorker(configuration, name, value)
       case "threads"
       case "maxQueue"
       case "bodyLimit"
+      case "bodyTimeoutMs"
+      case "rateLimit"
+      case "rateWindowMs"
+      case "rateMaxClients"
       case "requestTimeoutMs"
       case "startupTimeoutMs"
       case "shutdownTimeoutMs"
@@ -383,7 +402,7 @@ setWorker(configuration, name, value)
     return null
 
 applyXmlWorkers(configuration, tag)
-    allowed = ["enabled", "application", "threads", "maxQueue", "bodyLimit", "requestTimeoutMs", "startupTimeoutMs", "shutdownTimeoutMs", "workerFile", "optionsFile"]
+    allowed = ["enabled", "application", "threads", "maxQueue", "bodyLimit", "bodyTimeoutMs", "rateLimit", "rateWindowMs", "rateMaxClients", "requestTimeoutMs", "startupTimeoutMs", "shutdownTimeoutMs", "workerFile", "optionsFile"]
     if configuration.workers == null
         setWorker(configuration, "enabled", true)
     for tag.attributes() as name: value
@@ -417,6 +436,10 @@ validateWorkers(configuration)
         threads: 2
         maxQueue: 64
         bodyLimit: 1048576
+        bodyTimeoutMs: 30000
+        rateLimit: 0
+        rateWindowMs: 60000
+        rateMaxClients: 10000
         requestTimeoutMs: 30000
         startupTimeoutMs: 30000
         shutdownTimeoutMs: 30000
@@ -424,7 +447,7 @@ validateWorkers(configuration)
     for defaults as name: value
         if settings[name] == null
             settings[name] = value
-    for ["threads", "maxQueue", "bodyLimit", "requestTimeoutMs", "startupTimeoutMs", "shutdownTimeoutMs"] as name
+    for ["threads", "maxQueue", "bodyLimit", "bodyTimeoutMs", "rateLimit", "rateWindowMs", "rateMaxClients", "requestTimeoutMs", "startupTimeoutMs", "shutdownTimeoutMs"] as name
         settings[name] = workerInteger(settings[name], name)
     for ["application", "workerFile", "optionsFile"] as name
         value = settings[name]
@@ -545,6 +568,60 @@ test "worker deadlines follow XML environment and CLI precedence and timer limit
         try
             applyOptionConfiguration(defaults, {
                 workerTimeout: invalid
+            })
+        catch error
+            rejected = true
+        assert rejected
+
+test "body upload timeout follows XML environment and CLI precedence"
+    configuration = defaultConfiguration("upload")
+    applyXmlConfiguration(configuration, <conf><workers bodyTimeoutMs="900" /></conf>)
+    assert configuration.workers.bodyTimeoutMs == 900
+    applyEnvironmentConfiguration(configuration, {
+        LANGO_WORKER_BODY_TIMEOUT: "600"
+    })
+    assert configuration.workers.bodyTimeoutMs == 600
+    applyOptionConfiguration(configuration, {
+        workerBodyTimeout: "300"
+    })
+    validateWorkers(configuration)
+    assert configuration.workers.bodyTimeoutMs == 300
+    defaults = defaultConfiguration("defaults")
+    validateWorkers(defaults)
+    assert defaults.workers.bodyTimeoutMs == 30000
+    for [0, -1, 1.5, 2147483648] as invalid
+        rejected = false
+        try
+            applyOptionConfiguration(defaults, {
+                workerBodyTimeout: invalid
+            })
+        catch error
+            rejected = true
+        assert rejected
+
+test "rate limits follow XML environment and CLI precedence and remain opt in"
+    configuration = defaultConfiguration("rates")
+    applyXmlConfiguration(configuration, <conf><workers rateLimit="12" rateWindowMs="2000" rateMaxClients="20" /></conf>)
+    applyEnvironmentConfiguration(configuration, {
+        LANGO_WORKER_RATE_LIMIT: "8"
+        LANGO_WORKER_RATE_WINDOW: "1000"
+    })
+    applyOptionConfiguration(configuration, {
+        workerRateLimit: "4"
+        workerRateMaxClients: "10"
+    })
+    validateWorkers(configuration)
+    assert configuration.workers.rateLimit == 4
+    assert configuration.workers.rateWindowMs == 1000
+    assert configuration.workers.rateMaxClients == 10
+    defaults = defaultConfiguration("defaults")
+    validateWorkers(defaults)
+    assert defaults.workers.rateLimit == 0
+    for [-1, 1.5, 1000000001] as invalid
+        rejected = false
+        try
+            applyOptionConfiguration(defaults, {
+                workerRateLimit: invalid
             })
         catch error
             rejected = true

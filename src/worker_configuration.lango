@@ -88,6 +88,10 @@ workerConfiguration(configuration, routes = null)
         threads: settings.threads
         maxQueue: settings.maxQueue
         bodyLimit: settings.bodyLimit
+        bodyTimeoutMs: settings.bodyTimeoutMs
+        rateLimit: settings.rateLimit
+        rateWindowMs: settings.rateWindowMs
+        rateMaxClients: settings.rateMaxClients
         requestTimeoutMs: settings.requestTimeoutMs
         startupTimeoutMs: settings.startupTimeoutMs
         shutdownTimeoutMs: settings.shutdownTimeoutMs

@@ -4,7 +4,6 @@ import js global clearTimeout
 import js global Promise
 import js global Date
 import js global WeakMap
-import js global Buffer
 import js global structuredClone
 import js "node:crypto" as crypto
 import js "node:http" as http
@@ -13,6 +12,14 @@ import js "node:module" as nodeModule
 import js "piscina" as piscina
 import "./state"
     class SqliteStateStore
+import "./http_input"
+    requestBodyOptions(options)
+    readRequestBody(req, res, options, complete, failure)
+    rejectHttpRequest(req, res, status, error, retry, requestId)
+import "./rate_limit"
+    class RateLimiter
+import "./client_errors"
+    class ClientErrorSink
 
 export startWorkers(configuration)
 
@@ -41,9 +48,12 @@ WorkerHost(configuration)
     @configuration = configuration
     @closing = null
     @stopping = false
+    @initialized = false
     @shutdown = null
     @maxQueue = positiveOption(configuration.maxQueue, 64)
-    @bodyLimit = positiveOption(configuration.bodyLimit, 1048576)
+    @bodyOptions = requestBodyOptions(configuration)
+    @rateLimiter = new RateLimiter(configuration)
+    @clientErrors = new ClientErrorSink()
     threads = positiveOption(configuration.threads, 2)
     if threads > 128
         throw "ApiWorkerThreadLimit"
@@ -129,6 +139,7 @@ WorkerHost:start()
                 ids.add(worker.threadId)
         if ids.length != @threads
             throw "ApiWorkerInitializationIncomplete"
+        @initialized = true
         listening = new Promise((resolve, reject)
             configuration = @configuration
             server = @server
@@ -153,60 +164,57 @@ WorkerHost:start()
 
 WorkerHost:receive(req, res)
     requestId = crypto/randomUUID()
+    if req.method == "GET" and (req.url == "/health" or req.url == "/ready")
+        return probe(res, req.url)
     if @stopping
         return failure(res, 503, "ServiceUnavailable", requestId)
-    if req.method == "GET" and req.url == "/health"
-        return write(res, {
-            status: 200
-            headers: {
-                "Content-Type": "application/json; charset=utf-8"
-                "Cache-Control": "no-store"
-            }
-            body: to_json({
-                status: "ok"
-                queueSize: @waiting.length + @pool.queueSize
-                threads: @pool.threads.length
-            })
-        })
+    if req.method == "POST" and req.url == "/_lango/client-error"
+        return @clientErrors.receive(req, res)
+    retry = @rateLimiter.admit(req.socket.remoteAddress)
+    if retry > 0
+        return rateLimited(req, res, retry, requestId)
     observe(req, res, requestId)
     if req.method != "POST"
         return failure(res, 405, "MethodNotAllowed", requestId)
     if req.url.includes("?")
         return failure(res, 400, "QueryNotSupported", requestId)
-    chunks = []
-    size = 0
-    limit = @bodyLimit
-    req.on("data", (chunk)
-        capture chunks
-        capture size
-        capture limit
-        capture res
-        capture requestId
-        size = size + chunk.length
-        if size > limit
-            if !res.writableEnded
-                failure(res, 413, "RequestTooLarge", requestId)
-          else
-              chunks.add(chunk)
-    )
-    req.on("end", ()
-        capture chunks
+    completed = (body)
         capture req
         capture res
         capture requestId
-        if !res.writableEnded and !res.destroyed
-            body = Buffer/concat(chunks).toString("utf8")
-            if body == ""
-                body = "{}"
-            submit(req, res, body, requestId)
-    )
-    req.on("error", (error)
+        if body == ""
+            body = "{}"
+        submit(req, res, body, requestId)
+    rejected = (status, error)
         capture res
         capture requestId
-        if !res.writableEnded and !res.destroyed
-            failure(res, 400, "BadRequest", requestId)
-    )
+        failure(res, status, error, requestId)
+    readRequestBody(req, res, @bodyOptions, completed, rejected)
     return null
+
+WorkerHost:rateLimited(req, res, retry, requestId)
+    return rejectHttpRequest(req, res, 429, "TooManyRequests", retry, requestId)
+
+WorkerHost:probe(res, endpoint)
+    code = 200
+    status = "ok"
+    if endpoint == "/ready"
+        status = "ready"
+        if !@initialized or @stopping or @pool.threads.length == 0 or (@active >= @threads and @waiting.length >= @maxQueue)
+            code = 503
+            status = "not-ready"
+    return write(res, {
+        status: code
+        headers: {
+            "Content-Type": "application/json; charset=utf-8"
+            "Cache-Control": "no-store"
+        }
+        body: to_json({
+            status: status
+            queueSize: @waiting.length + @pool.queueSize
+            threads: @pool.threads.length
+        })
+    })
 
 WorkerHost:submit(req, res, body, requestId)
     if @stopping or (@active >= @threads and @waiting.length >= @maxQueue)

@@ -1,0 +1,20 @@
+import "./library"
+    class Routes
+
+export createWorker(options)
+
+createWorker(options)
+    routes = new Routes()
+    routes.endpoint({
+        path: "/info"
+        function: info
+        anonymous: true
+    })
+    return {
+        routes: routes.values()
+    }
+
+info(input)
+    return {
+        ok: true
+    }

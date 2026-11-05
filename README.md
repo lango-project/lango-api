@@ -341,6 +341,10 @@ disabling workers fails with `ApiWorkersRequired`. No async HTTP fallback remain
 | `--worker-threads` | `LANGO_WORKER_THREADS` | `threads` | 2, maximum 128 |
 | `--worker-max-queue` | `LANGO_WORKER_MAX_QUEUE` | `maxQueue` | 64 |
 | `--worker-body-limit` | `LANGO_WORKER_BODY_LIMIT` | `bodyLimit` | 1048576 bytes |
+| `--worker-body-timeout` | `LANGO_WORKER_BODY_TIMEOUT` | `bodyTimeoutMs` | 30000 ms |
+| `--worker-rate-limit` | `LANGO_WORKER_RATE_LIMIT` | `rateLimit` | 0 (disabled) |
+| `--worker-rate-window` | `LANGO_WORKER_RATE_WINDOW` | `rateWindowMs` | 60000 ms |
+| `--worker-rate-max-clients` | `LANGO_WORKER_RATE_MAX_CLIENTS` | `rateMaxClients` | 10000 |
 | `--worker-entry` | `LANGO_WORKER_ENTRY` | `workerFile` | Package worker-entry export |
 | `--worker-options` | `LANGO_WORKER_OPTIONS` | `optionsFile` | None |
 
@@ -354,6 +358,84 @@ There is one in-flight task slot per worker. Host admission is FIFO, with a shar
 bounded queue for requests and audits; Piscina does not choose their queue order.
 Queueing counts toward the task deadline.
 
+The body limit counts bytes, including chunked uploads. An excessive declared
+Content-Length is rejected before buffering; an upload that crosses the limit
+receives 413 `RequestTooLarge`. The upload deadline starts when request headers
+reach the host and bounds the entire body transfer, even if bytes keep arriving.
+It returns 408 `RequestTimeout` separately from the worker task's 504 deadline.
+Rejected uploads release their buffered chunks and close the connection after
+the error response. Disconnected uploads never enter the worker queue. UTF-8 is
+decoded after collecting the accepted bytes, preserving characters split across
+network chunks. Header reception remains subject to Node's HTTP header limits.
+
+GET `/health` is a liveness probe: it reports the HTTP host's responsiveness,
+including while workers are saturated. GET `/ready` is an admission-readiness
+probe: it returns 200 with `status: "ready"` after initialization when there is
+capacity, or 503 with `status: "not-ready"` while closing, without workers, or
+when both worker slots and the admission queue are full. Both bypass workers,
+JWT, and request audit, return `Cache-Control: no-store`, and report only status,
+queueSize and threads. A successful readiness probe is a point-in-time capacity
+check, not a reservation or a database/dependency check. HTTP listening begins
+only after startup/preload succeeds, so there is no startup probe response before
+then; during shutdown new connections may already be refused.
+
+Node hosts that proxy this API can share its body reader through the
+`@lango-project/lango-api/http-input` export. Validate limits once with
+`requestBodyOptions(options)`, then call
+`readRequestBody(req, res, limits, complete, failure)`. `complete(body)` receives
+accepted UTF-8 text; `failure(status, error)` must write/end the response. The
+reader handles buffering, deadlines and disconnects; it does not parse JSON.
+
+### Request rate limits
+
+Set `workers.rateLimit` to a positive integer to cap requests per socket IP in a
+fixed window. XML, environment and CLI use the table above. For example,
+`<workers rateLimit="120" rateWindowMs="60000" rateMaxClients="10000" />`
+allows 120 admitted requests per IP per minute. Limits apply before body
+buffering, JWT validation and worker/audit admission. Rejected requests receive
+429 `TooManyRequests`, a whole-second `Retry-After`, no JWT and no-store caching;
+the connection closes after the response. The quota is shared across all
+workers of one Host, includes failed requests, and exempts `/health`, `/ready`
+and the separately limited client-error endpoint. Windows can allow bursts at
+their boundary; this is not a smooth request scheduler.
+
+Tracked addresses are bounded by `rateMaxClients`. When full, new addresses are
+rejected until expired entries can be reclaimed; live quotas are never evicted
+to admit a new key. The clock is monotonic and state is process-local: restart
+resets quotas, and multiple hosts/replicas do not share them. This is an IP
+admission guard, not an account-level or distributed policy. Forwarded and
+X-Forwarded-For headers are never trusted. Behind a proxy, put the IP limit at
+the trusted ingress (or BrowserHost) instead of limiting all users as one proxy
+address. The general limit is opt-in to preserve existing workload behavior.
+The `./rate-limit` export supplies the same Lango `RateLimiter` for Node hosts.
+
+### Private client-error telemetry
+
+POST `/_lango/client-error` accepts this separate, versioned contract:
+
+```json
+{"version":1,"source":"ui","code":"UnexpectedError","count":1}
+```
+
+Only these four fields are accepted. Sources are `ui`, `window`, `promise`;
+codes are `UnexpectedError`, `UiProtocolUnsupported`, `UiHttpError`; count is an
+integer from 1 to 100. Extra fields, unknown categories and malformed input are
+400 `ClientReportInvalid`. Bodies are limited to 2048 bytes and 3000 ms. Reports
+have independent quotas of 10 attempts per socket IP per minute (at most 10000
+tracked IPs) and 1000 per Host per minute. Invalid reports consume quota, too.
+Excess attempts receive 429/Retry-After even when general request limits are off.
+
+Accepted reports return 202 and log only the allowed source/code/count and a
+SHA-256 fingerprint of source/code. Messages, stacks, URLs, form data, tokens,
+IP addresses and headers do not enter that log. Reports bypass the worker,
+JWT renewal and request-audit snapshots; rejection also avoids body snapshots.
+The endpoint is anonymous telemetry: categories/counts are untrusted claims,
+not authenticated diagnostics or evidence of a business action. Fingerprints
+group coarse categories, not stack traces. Requests are never deliberately
+delayed or retried. The endpoint reserves its `/_lango/` path.
+
+### Worker deadlines and lifecycle
+
 | CLI | Environment | Workers attribute | Default |
 | --- | --- | --- | --- |
 | `--worker-timeout` | `LANGO_WORKER_TIMEOUT` | `requestTimeoutMs` | 30000 ms |
@@ -365,7 +447,7 @@ uses the same XML → environment → CLI precedence as other worker options.
 
 A request/audit deadline covers admission through completion of the pool task,
 including queue time and replacement-worker initialization. It begins after the
-HTTP body is received; Node's HTTP upload/header limits are separate. A queued
+HTTP body is received; the body upload deadline and Node header limits are separate. A queued
 expired task is removed without execution. A running expired task triggers worker
 termination/replacement. The HTTP result is 504 `GatewayTimeout`, with no JWT.
 A worker crash produces a generic 500 without JWT. Neither case retries the task.
@@ -488,7 +570,7 @@ not a production capacity or long-running memory-leak guarantee.
 
 ## API/UI starter release
 
-The API 0.2.0 release is paired with UI/client 0.2.0 and compiler 0.1.9 in the
+The API 0.2.0 release is paired with UI/client 0.2.0 and compiler 0.1.10 in the
 application generator provided by `lango-client`. Its Node-only BrowserHost starts
 this worker Host, serves registered UI page shells/assets and proxies same-origin
 JSON requests. The generated application's business handlers remain synchronous

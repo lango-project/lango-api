@@ -63,6 +63,11 @@ Harness:post(endpoint, input = null, bearer = null)
     return @host.request(endpoint, input, bearer)
 
 Harness:bootstrap()
+    probe = @host.raw("/ready", null, null, "GET")
+    readiness = probe.read()
+    assert readiness.status == 200
+    assert readiness.body.status == "ready"
+    assert readiness.cache == "no-store"
     result = post("/_lango/start")
     assert result.status == 200
     assert is_string(result.token)
@@ -158,13 +163,20 @@ Harness:queue()
     waiting = [@host.pending("/info", null, @token), @host.pending("/info", null, @token)]
     rejected = waitForTestResponse(waiting, Date/now() + 10000)
     assert waiting[rejected].read().status == 503
+    probe = @host.raw("/ready", null, null, "GET")
+    readiness = probe.read()
+    assert readiness.status == 503
+    assert readiness.body.status == "not-ready"
+    health()
     fs.writeFileSync("${@marker}.release", "release")
     fs.writeFileSync("${@marker}.second.release", "release")
     accepted = 1 - rejected
     assert waiting[accepted].read().status == 200
     assert first.read().status == 200
     assert second.read().status == 200
-    println("PASS two workers run concurrently; a bounded queue rejects overload while HTTP health remains responsive")
+    available = @host.raw("/ready", null, null, "GET")
+    assert available.read().status == 200
+    println("PASS two workers run concurrently; saturation changes readiness while HTTP liveness stays responsive; readiness recovers after drain")
 
 Harness:health()
     pending = @host.raw("/health", null, null, "GET")

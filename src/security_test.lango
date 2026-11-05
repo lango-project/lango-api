@@ -1,0 +1,190 @@
+import js "node:events" as events
+import js "node:fs" as fs
+import js "node:path" as path
+import js "node:os" as os
+import js global Buffer
+import "./rate_limit"
+    class RateLimiter
+import "./client_errors"
+    class ClientErrorSink
+import "./http_test_support"
+    class HttpTestServer
+    class HttpTestRequest
+
+export main(args)
+
+rateTests()
+    limiter = new RateLimiter({
+        rateLimit: 2
+        rateWindowMs: 1500
+        rateMaxClients: 2
+    })
+    assert limiter.admit("a", 0) == 0
+    assert limiter.admit("a", 0) == 0
+    assert limiter.admit("a", 0) == 2
+    assert limiter.admit("a", 600) == 1
+    assert limiter.admit("b", 600) == 0
+    assert limiter.admit("c", 600) > 0
+    assert limiter.admit("a", 1500) == 0
+    assert limiter.admit("b", 1500) == 0
+    assert limiter.admit("c", 2100) == 0
+    disabled = new RateLimiter({
+    })
+    for range(100) as index
+        assert disabled.admit("same", 0) == 0
+    for [-1, 0.5, "2", true, 1000000001] as invalid
+        rejected = false
+        try
+            candidate = new RateLimiter({
+                rateLimit: invalid
+            })
+        catch error
+            rejected = true
+        assert rejected
+    println("PASS fixed windows isolate addresses, round Retry-After up, bound client state and reclaim expired slots")
+
+class Log
+    properties
+        lines
+    methods
+        warn(message)
+
+Log()
+    @lines = []
+
+Log:warn(message)
+    @lines.add(message)
+
+sinkRequest(sink, body)
+    req = new events/EventEmitter()
+    req.aborted = false
+    req.headers = {
+    }
+    req.socket = {
+        remoteAddress: "127.0.0.1"
+    }
+    paused = ()
+        return null
+    destroyed = ()
+        return null
+    req.pause = paused
+    req.destroy = destroyed
+    res = new events/EventEmitter()
+    res.destroyed = false
+    res.writableEnded = false
+    res.result = null
+    header = (name, value)
+        return null
+    status = (code, headers)
+        capture res
+        res.status = code
+        return res
+    ended = (text)
+        capture res
+        res.result = from_json(text)
+        res.writableEnded = true
+        res.emit("finish")
+    res.setHeader = header
+    res.writeHead = status
+    res.end = ended
+    sink.receive(req, res)
+    req.emit("data", Buffer/from(body))
+    req.emit("end")
+    return res
+
+sinkTests()
+    logger = new Log()
+    context log = logger
+    sink = new ClientErrorSink()
+    report = {
+        version: 1
+        source: "ui"
+        code: "UiHttpError"
+        count: 3
+    }
+    first = sinkRequest(sink, to_json(report))
+    assert first.status == 202
+    assert logger.lines.length == 1
+    report.message = "secret-token private@example.com /private?password=secret"
+    rejected = sinkRequest(sink, to_json(report))
+    assert rejected.status == 400
+    assert logger.lines.length == 1
+    assert !to_json(logger.lines).includes("secret")
+    invalid = sinkRequest(sink, "{")
+    assert invalid.status == 400
+    for range(7) as index
+        next = sinkRequest(sink, to_json({
+            version: 1
+            source: "ui"
+            code: "UiHttpError"
+            count: 1
+        }))
+        assert next.status == 202
+    limited = sinkRequest(sink, to_json(report))
+    assert limited.status == 429
+    assert logger.lines.length == 8
+    firstPrefix = logger.lines[0].split(":")[0]
+    assert logger.lines[1].startsWith(firstPrefix)
+    println("PASS error sink rejects extra/private fields and malformed JSON, fingerprints only fixed categories and caps reports")
+
+httpTests()
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), "lango-security-"))
+    host = new HttpTestServer(directory)
+    try
+        host.start({
+            appRoot: path.resolve(".")
+            application: path.resolve(".test-output/security_fixture.mjs")
+            workerFile: path.resolve(".test-output/worker_entry.mjs")
+            stateFile: path.join(directory, "state.sqlite")
+            host: "127.0.0.1"
+            port: 0
+            threads: 2
+            rateLimit: 2
+            rateWindowMs: 60000
+        })
+        assert host.request("/info").status == 200
+        forged = new HttpTestRequest(directory, 101, "${host.url}/info", {
+            method: "POST"
+            body: "{}"
+            headers: {
+                "X-Forwarded-For": "1.2.3.4"
+            }
+        })
+        assert forged.read().status == 200
+        denied = new HttpTestRequest(directory, 102, "${host.url}/info", {
+            method: "POST"
+            body: "{}"
+            headers: {
+                "X-Forwarded-For": "5.6.7.8"
+            }
+        })
+        result = denied.read()
+        assert result.status == 429
+        assert result.body.error == "TooManyRequests"
+        assert is_string(result.retry)
+        seconds = to_js_number($(result.retry))
+        assert seconds > 0 and seconds <= 60
+        assert result.token == null
+        assert result.cache == "no-store"
+        probe = host.raw("/ready", null, null, "GET")
+        assert probe.read().status == 200
+        telemetry = host.request("/_lango/client-error", {
+            version: 1
+            source: "window"
+            code: "UnexpectedError"
+            count: 1
+        })
+        assert telemetry.status == 202
+        assert telemetry.token == null
+        println("PASS HTTP quota is shared across workers, ignores forwarded addresses, returns Retry-After and leaves probes/telemetry independent")
+    finally
+        host.stop()
+        fs.rmSync(directory, {
+            recursive: true
+            force: true
+        })
+
+main(args)
+    rateTests()
+    sinkTests()
+    httpTests()

@@ -1,0 +1,244 @@
+import js "node:events" as events
+import js "node:http" as http
+import js global Buffer
+import js global Promise
+import "./http_input"
+    requestBodyOptions(options)
+    readRequestBody(req, res, options, complete, failure)
+
+export main(args)
+
+fixture()
+    req = new events/EventEmitter()
+    req.headers = {
+    }
+    req.paused = false
+    req.aborted = false
+    req.destroyed = false
+    paused = ()
+        capture req
+        req.paused = true
+        return req
+    destroyed = ()
+        capture req
+        req.destroyed = true
+        req.emit("error", "Disconnected")
+    req.pause = paused
+    req.destroy = destroyed
+    res = new events/EventEmitter()
+    res.destroyed = false
+    res.writableEnded = false
+    res.headers = {
+    }
+    header = (name, value)
+        capture res
+        res.headers[name] = value
+        return res
+    res.setHeader = header
+    state = {
+        completed: 0
+        rejected: 0
+        body: null
+        status: null
+    }
+    completed = (body)
+        capture state
+        state.completed = state.completed + 1
+        state.body = body
+    rejected = (status, error)
+        capture state
+        capture res
+        state.rejected = state.rejected + 1
+        state.status = status
+        res.writableEnded = true
+        res.emit("finish")
+    return {
+        req: req
+        res: res
+        state: state
+        complete: completed
+        failure: rejected
+    }
+
+unitTests()
+    options = requestBodyOptions({
+        bodyLimit: 2
+        bodyTimeoutMs: 1000
+    })
+    exact = fixture()
+    readRequestBody(exact.req, exact.res, options, exact.complete, exact.failure)
+    bytes = Buffer/from("é")
+    exact.req.emit("data", bytes.subarray(0, 1))
+    exact.req.emit("data", bytes.subarray(1))
+    exact.req.emit("end")
+    assert exact.state.completed == 1
+    assert exact.state.body == "é"
+    assert exact.state.rejected == 0
+    assert exact.req.listenerCount("data") == 0
+    assert exact.res.listenerCount("close") == 0
+    large = fixture()
+    readRequestBody(large.req, large.res, options, large.complete, large.failure)
+    large.req.emit("data", Buffer/from("abc"))
+    large.req.emit("end")
+    large.req.emit("data", Buffer/from("more"))
+    assert large.state.status == 413
+    assert large.state.rejected == 1
+    assert large.state.completed == 0
+    assert large.req.paused
+    assert large.req.destroyed
+    assert large.res.headers.Connection == "close"
+    declared = fixture()
+    declared.req.headers["content-length"] = "3"
+    readRequestBody(declared.req, declared.res, options, declared.complete, declared.failure)
+    assert declared.state.status == 413
+    assert declared.req.listenerCount("data") == 0
+    abandoned = fixture()
+    readRequestBody(abandoned.req, abandoned.res, options, abandoned.complete, abandoned.failure)
+    abandoned.req.emit("data", bytes)
+    abandoned.req.emit("aborted")
+    abandoned.req.emit("end")
+    assert abandoned.state.completed == 0
+    assert abandoned.state.rejected == 0
+    assert abandoned.req.listenerCount("end") == 0
+    assert abandoned.res.listenerCount("close") == 0
+    disconnected = fixture()
+    readRequestBody(disconnected.req, disconnected.res, options, disconnected.complete, disconnected.failure)
+    disconnected.res.emit("close")
+    disconnected.req.emit("end")
+    assert disconnected.state.completed == 0
+    assert disconnected.state.rejected == 0
+    assert disconnected.req.listenerCount("data") == 0
+    broken = fixture()
+    readRequestBody(broken.req, broken.res, options, broken.complete, broken.failure)
+    broken.req.emit("error", "ReadFailure")
+    broken.req.emit("end")
+    assert broken.state.status == 400
+    assert broken.state.rejected == 1
+    assert broken.state.completed == 0
+    defaults = requestBodyOptions({
+    })
+    assert defaults.bodyLimit == 1048576
+    assert defaults.bodyTimeoutMs == 30000
+    for [0, -1, 1.5, "10", true, 2147483648] as invalid
+        rejected = false
+        try
+            requestBodyOptions({
+                bodyTimeoutMs: invalid
+            })
+        catch error
+            rejected = true
+        assert rejected
+    println("PASS body reader enforces byte limits, preserves split UTF-8, rejects once and cleans up aborted uploads")
+
+class Probe
+    methods
+        run()
+
+Probe()
+    @calls = 0
+    @server = null
+    @url = null
+
+Probe:run()
+    server = new http/Server((req, res)
+        accept(req, res)
+    )
+    @server = server
+    pending = new Promise((resolve, reject)
+        server = @server
+        server.once("error", reject)
+        server.listen(0, "127.0.0.1", ()
+            capture resolve
+            address = @server.address()
+            @url = "http://127.0.0.1:${address.port}"
+            resolve(null)
+        )
+    )
+    return pending.then(()
+        return send("utf8")
+    ).then((result)
+        assert result.status == 200
+        assert result.body == "é"
+        return send("declared")
+    ).then((result)
+        assert result.status == 413
+        return send("chunked")
+    ).then((result)
+        assert result.status == 413
+        return send("stalled")
+    ).then((result)
+        assert result.status == 408
+        assert @calls == 1
+        println("PASS real HTTP rejects declared/chunked oversized bodies and stalled uploads before dispatch")
+    ).finally(()
+        @server.close()
+    )
+
+Probe:accept(req, res)
+    completed = (body)
+        capture res
+        @calls++
+        res.end(body)
+    failed = (status, error)
+        capture res
+        res.writeHead(status)
+        res.end(error)
+    readRequestBody(req, res, requestBodyOptions({
+        bodyLimit: 2
+        bodyTimeoutMs: 100
+    }), completed, failed)
+
+Probe:send(mode)
+    pending = new Promise((resolve, reject)
+        capture mode
+        capture http
+        headers = {
+        }
+        if mode == "declared"
+            headers["Content-Length"] = "3"
+        received = (res)
+            capture resolve
+            decode(res, resolve)
+        req = http/request(@url, {
+            method: "POST"
+            headers: headers
+        }, received)
+        req.on("error", reject)
+        req.setTimeout(3000, ()
+            capture req
+            req.destroy()
+        )
+        switch mode
+          case "utf8"
+              bytes = Buffer/from("é")
+              req.write(bytes.subarray(0, 1))
+              req.end(bytes.subarray(1))
+          case "chunked"
+              req.write("ab")
+              req.write("c")
+          else
+              req.flushHeaders()
+    )
+    return pending
+
+Probe:decode(res, resolve)
+    chunks = []
+    res.on("data", (chunk)
+        capture chunks
+        chunks.add(chunk)
+    )
+    res.on("end", ()
+        capture chunks
+        capture res
+        capture resolve
+        body = Buffer/concat(chunks).toString("utf8")
+        resolve({
+            status: res.statusCode
+            body: body
+        })
+    )
+
+main(args)
+    unitTests()
+    probe = new Probe()
+    return probe.run()

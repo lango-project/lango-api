@@ -36,5 +36,6 @@ decoded(res)
             thread: res.headers.get("x-worker-thread")
             authenticate: res.headers.get("www-authenticate")
             cache: res.headers.get("cache-control")
+            retry: res.headers.get("retry-after")
         }
     )
