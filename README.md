@@ -485,3 +485,12 @@ The report includes request/health latency, throughput, errors, committed rows
 and process RSS. See [the measured baseline](benchmarks/worker-baseline.md) and
 [its JSON data](benchmarks/worker-baseline.json). It is a short local baseline,
 not a production capacity or long-running memory-leak guarantee.
+
+## API/UI starter release
+
+The API 0.2.0 release is paired with UI/client 0.2.0 and compiler 0.1.9 in the
+application generator provided by `lango-client`. Its Node-only BrowserHost starts
+this worker Host, serves registered UI page shells/assets and proxies same-origin
+JSON requests. The generated application's business handlers remain synchronous
+Lango. UI event envelopes use protocol 1; ordinary API/bootstrap/ping/logout
+contracts are unchanged. See the client package's application-generator guide.
